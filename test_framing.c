@@ -18,27 +18,24 @@ void print_hex(byte *data, uint len){
 int main(int argc, char *argv[]) {
     uint i;
     uint len;
-    byte *data, *str, *ufdata;
+    byte data[DATA_CHUNK], ufdata[DATA_CHUNK], *str;
 	
 	for(i = 1; i < argc; i++){
 		len = strlen(argv[i]);	
         si_print_hex((byte *) argv[i], len);
-        data = si_frame((byte *) argv[i], &len);
+        len = si_frame(data, (byte *) argv[i], len);
         si_print_hex(data, len);
-        free(data);
 	}
     str = (byte *) "\xAB\x08" "Nazdarek";
     len = strlen((char *) str);
-    data = si_frame(str, &len);
+    len = si_frame(data, str, len);
     si_print_hex(data, len);
-    if((ufdata = si_unframe(data, &len)) == NULL){
+    if((len = si_unframe(ufdata, data, len)) == 0){
         si_perror("Chyba unframingu");
     }else{
         puts("Unframed:");
         si_print_hex(ufdata, len);
-        free(ufdata);
     }
-    free(data);
 	return 0;
 } 
 

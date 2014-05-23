@@ -142,7 +142,7 @@ uint16 j, Sum, Sum1;
 #define SI_PRODUCT_ID "800a"
 
 /* Recursive filesystem search */
-static int walk(char result[][PATH_MAX], int j){
+static int walk(char result[][PATH_MAX+1], int j){
     uint    SI_ID_LEN = strlen(SI_VENDOR_ID);
     uint    SI_DEV_PATTERN_LEN = strlen(SI_DEV_PATTERN);
 	DIR    *dir;
@@ -186,19 +186,27 @@ static int walk(char result[][PATH_MAX], int j){
 	return j;
 }
 
-int si_detect_devices(char result[][PATH_MAX]){
+int si_detect_devices(char result[][PATH_MAX+1]){
 	int i, j = 0;
-    char filename[PATH_MAX];
+    char filename[PATH_MAX+1];
+	char cur_dir[PATH_MAX+1];
 
+	getcwd(cur_dir, PATH_MAX);
 	if(chdir(SI_SEARCHDIR) != 0){
-		error(0, errno, "Cannot open directory %s", SI_SEARCHDIR);
+		error(0, errno, "Cannot change to directory %s", SI_SEARCHDIR);
 		return 0;
 	}
 	j = walk(result, j);
+	if(si_verbose > 2){
+		puts("Detected devices:");
+	}
     for(i = 0; i < j; i++){
         strcpy(filename, result[i]);
         strcpy(result[i], SI_DEV_PREFIX);
         strcat(result[i], filename);
+		if(si_verbose > 2){
+			printf("%d: %s\n", i, result[i]);
+		}
     }
 	return j;
 }
@@ -223,7 +231,7 @@ int si_initserial(char *serial_device){
     termset.c_lflag &= ~(ECHO | ECHOK | ICANON | ISIG);
     termset.c_iflag &= ~(BRKINT | ICRNL | IGNCR | INLCR | INPCK | ISTRIP | IXOFF | IXON | PARMRK);
     termset.c_oflag &= ~OPOST;
-    termset.c_cc[VTIME] = 1;            // Wait for 0.1 delay between bytes or
+    termset.c_cc[VTIME] = 1;             // Wait for 0.1 delay between bytes or
     termset.c_cc[VMIN] = DATA_CHUNK;     // Return after reading all buffer
     cfsetispeed(&termset, B38400);
 
@@ -274,145 +282,112 @@ int si_setspeed(int sfd, E_SPEED speed){
 /****************************************************************************
  * Lowlevel SI data manipulation
  ****************************************************************************/
-byte *si_frame(byte *data, uint *p_len){
-    uint i, j, lendata, crc;
-    byte *framed_data;
-    uint len = *p_len;
+uint si_frame(byte *data_out, byte *data_in, uint len_in){
+    uint i, len_out, lendata, crc;
 
-    if(data[0] < 0x20){                             // Control codes
-        if((framed_data = (byte *) malloc(2)) == NULL){
-            si_errno = 105;                         // No memory left
-            return NULL;
-        }
-        framed_data[0] = WAKE;
-        framed_data[1] = data[0];
-        j = 2;
-    }else if(data[0] < 0x80 || data[0] == 0xC4){    // Old protocol
-        if((framed_data = (byte *) malloc(3 + 2 * len)) == NULL){
-            si_errno = 105;                         // No memory left
-            return NULL;
-        }
-        framed_data[0] = WAKE;
-        framed_data[1] = STX;
-        j = 2;
-        for(i = 0; i < len; i++){
-            if(data[i] < 0x20){
-                framed_data[j++] = DLE;
+    if(data_in[0] < 0x20){                             // Control codes
+        data_out[0] = WAKE;
+        data_out[1] = data_in[0];
+        len_out = 2;
+    }else if(data_in[0] < 0x80 || data_in[0] == 0xC4){    // Old protocol
+        data_out[0] = WAKE;
+        data_out[1] = STX;
+        len_out = 2;
+        for(i = 0; i < len_in; i++){
+            if(data_in[i] < 0x20){
+                data_out[len_out++] = DLE;
             }
-            framed_data[j++] = data[i];
+            data_out[len_out++] = data_in[i];
         }
-        framed_data[j++] = ETX;
+        data_out[len_out++] = ETX;
     }else{                                          // New protocol
-        if((framed_data = (byte *) malloc(5 + len)) == NULL){
-            si_errno = 105;                         // No memory left
-            return NULL;
-        }
-        lendata = data[1];
-        crc = si_crc(lendata+2, data);
-        framed_data[0] = WAKE;
-        framed_data[1] = STX;
-        j = 2;
-        memcpy(framed_data + j, data, len);
-        j += len;
-        framed_data[j++] = (byte) (crc >> 8);
-        framed_data[j++] = (byte) (crc & 0xFF);
-        framed_data[j++] = ETX;
+        lendata = data_in[1];
+        crc = si_crc(lendata+2, data_in);
+        data_out[0] = WAKE;
+        data_out[1] = STX;
+        len_out = 2;
+        memcpy(data_out + len_out, data_in, lendata+2);
+        len_out += lendata+2;
+        data_out[len_out++] = (byte) (crc >> 8);
+        data_out[len_out++] = (byte) (crc & 0xFF);
+        data_out[len_out++] = ETX;
     }
-    *p_len = j;                                     // return actual length
-    return framed_data;
+    return len_out;
 }
 
 /*
  * Unframe received data
  * First two bytes of returned array is length of data (MSB LSB)
  */
-byte *si_unframe(byte *data, uint len){
-    uint i, j, lendata, f_dle;
-    uint uf_len = 0;
+uint si_unframe(byte *data_out, byte *data_in, uint len_in){
+    uint lendata, f_dle;
+    uint i = 0, len_out = 0;
     uint data_crc, comp_crc;
-    byte *uf_data;
 
-    i = 0;
-    while(data[i] != STX && i < len){
-        if(data[i] == NAK || data[i] == ACK){
-            if((uf_data = (byte *) malloc(2 + 1)) == NULL){
-                si_errno = 105;                         // No memory left
-                return NULL;
-            }
-            uf_data[0] = 0; uf_data[1] = 1; uf_data[2] = data[i];
-            return uf_data;
+    while(data_in[i] != STX && i < len_in){
+        if(data_in[i] == NAK || data_in[i] == ACK){
+            data_out[len_out++] = data_in[i];
+            return len_out;
         }
         i++;
     }
     i++;    // i points behind STX - onto Command
-    if(i >= len){
-        si_errno = 104;                       // On end of data
-        return NULL;
+
+    if(i >= len_in){
+        si_errno = ERR_NOSTART;                     // On end of data
+        return len_out;
     }
-    if(data[i] < 0x80 || data[i] == 0xC4){    // Old protocol - strip off DLE
-        if((uf_data = malloc(2 + len - i)) == NULL){
-            si_errno = 105;                         // No memory left
-            return NULL;
-        }
+    if(data_in[i] < 0x80 || data_in[i] == 0xC4){    // Old protocol - strip off DLE
         f_dle = 0;
-        j = 0;
-        while(i < len){
-            if(f_dle > 0){
-                f_dle = 0;
-            }else if(data[i] == ETX){
+        while(i < len_in){
+            if(data_in[i] == ETX){
                 break;
-            }else if(data[i] == DLE){
+            }else if(data_in[i] == DLE){
                 f_dle++;
             }else{
-                uf_data[2+j++] = data[i];
+                data_out[len_out++] = data_in[i];
             }
             i++;
         }
-        uf_len = j;
     }else{                                  // New protocol
-        lendata = data[i+1];
-        if((uf_data = malloc(2+lendata+2)) == NULL){
-            si_errno = 105;                         // No memory left
-            return NULL;
-        }
-        data_crc = (data[i+lendata+2] << 8) + data[i+lendata+3];
-        comp_crc = si_crc(lendata+2, data+i);
+        lendata = data_in[i+1];
+        data_crc = (data_in[i+lendata+2] << 8) + data_in[i+lendata+3];
+        comp_crc = si_crc(lendata+2, data_in+i);
         if(comp_crc != data_crc){
-            si_errno = 106;                         // Bad CRC
-            free(uf_data);
-            return NULL;
+            si_errno = ERR_BADCRC;                         // Bad CRC
+            return len_out;
         }else{
-            memcpy(uf_data+2, data+i, lendata+2);
-            uf_len = lendata+2;
+            memcpy(data_out, data_in+i, lendata+2);
+            len_out = lendata+2;
         }
     }
-    uf_data[0] = uf_len << 8; uf_data[1] = uf_len & 0xFF;		// Length of data
-    return uf_data;
+    return len_out;
 }
 
 /****************************************************************************
- * Lowlevel SI communication
+ * Lowlevel SI communication. Just simple wrappers for debug output
  ****************************************************************************/
 int si_read(int sfd, byte *buff){
     ssize_t size;
 
     size = read(sfd, buff, DATA_CHUNK);
-    if(size == -1){
-        si_errno = 104;         // Read from serial device error
-        return(-1);
-    }
-    return(1);
+	if(size > 0){
+		if(si_verbose > 2){
+			fputs("<i<< ", stdout);
+			si_print_hex(buff, size);
+		}
+	}
+	return size;
 }
 
-int si_write(int sfd, byte *buff){
+int si_write(int sfd, byte *buff, uint len){
     ssize_t size;
 
-    size = write(sfd, buff, DATA_CHUNK);
-    if(size == -1){
-        si_errno = 104;         // Read of serial device error
-        return(-1);
-    }
-    return(1);
+	if(si_verbose > 2){
+		fputs(">o>> ", stdout);
+		si_print_hex(buff, len);
+	}
+    return(size = write(sfd, buff, len));
 }
 
 /*
@@ -436,18 +411,21 @@ int si_read_timeout(int sfd, int timeout){
     return nready;
 }
 
+/****************************************************************************
+ * Midlevel SI communication.
+ ****************************************************************************/
+
 /* 
  * Write to SI station and read data back.
  * Wait timeout of miliseconds for input.
  * Try <tries> times when receiving NAK.
  * First two bytes of returned array is length of data (MSB LSB).
  */  
-byte *si_handshake(int sfd, int timeout, int tries, ...){
+uint si_handshake(byte *data_out, int sfd, int timeout, int tries, ...){
     va_list ap;
-    byte b, data_write[DATA_CHUNK], data_read[DATA_CHUNK];
-    byte *data_framed = NULL, *data_unframed = NULL;
+    byte b, data_write[DATA_CHUNK], data_framed[DATA_CHUNK], data_read[DATA_CHUNK];
     uint len, bytes_written, bytes_read, i = 0;
-    uint errcount = 0;
+	uint len_out = 0, errcount = 0;
 
     va_start(ap, tries);
     while((b = (byte) va_arg(ap, int)) != EOP){
@@ -457,39 +435,37 @@ byte *si_handshake(int sfd, int timeout, int tries, ...){
     va_end(ap);
     
     len = i;
-    data_framed = si_frame(data_write, &len);
+    len = si_frame(data_framed, data_write, len);
     
     while(errcount < tries){
-        if(si_verbose > 2){
-            fputs(">o>> ", stdout);
-            si_print_hex(data_framed, len);
-        }
-        bytes_written = write(sfd, data_framed, len);
+
+        bytes_written = si_write(sfd, data_framed, len);
         if(bytes_written != len){
 			si_errno = ERR_WRITE;
             errcount++;
             continue;
         }
-		free(data_unframed); data_unframed = NULL;
+
 		if(si_read_timeout(sfd, timeout) <= 0){
 			si_errno = ERR_TIMEOUT;
-			errcount++;
-			continue;
+			break;
 		}
-        bytes_read = read(sfd, data_read, DATA_CHUNK);
+
+        bytes_read = si_read(sfd, data_read);
 		if(bytes_read < 0){		// some error
 			si_errno = ERR_READ;
 			errcount++;
             continue;
         }
 		if(bytes_read > 0){		// no input
-			if(si_verbose > 2){
-				fputs("<i<< ", stdout);
-				si_print_hex(data_read, bytes_read);
+			len_out = si_unframe(data_out, data_read, bytes_read);
+			if(len_out <= 0){
+				errcount++;
+				continue;
 			}
-			data_unframed = si_unframe(data_read, bytes_read);
-			if(data_unframed[2] == NAK){
+			if(data_out[0] == NAK){
 				si_errno = ERR_NAK;
+				len_out = 0;
 				errcount++;
 				continue;
 			}
@@ -497,43 +473,81 @@ byte *si_handshake(int sfd, int timeout, int tries, ...){
 			break;
 		}
     }
-	free(data_framed);
-	return data_unframed;
+	return len_out;
 }
 
 int si_station_detect(int sfd){
 	E_SPEED speed = HIGH;
 	E_INSTSET instset = NEW;
-	byte c_setms;
-	byte *data = NULL;
+	byte data[DATA_CHUNK], c_setms;
+	uint len = 0;
+	int detected = 0;
 
 	do{
-		c_setms = (instset == NEW) ? C_SETMS : O_SETMS;
-		free(data);
-		data = si_handshake(sfd, RTIMEOUT_MS, MAX_TRIES, c_setms, 0x01, P_MSL, EOP);		// Set local communication
-		if(data == NULL){
+		c_setms = (instset == NEW) ? C_SETMS : U_SETMS;
+		len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, c_setms, 1, P_MSL, EOP);		// Set local communication
+		if(len <= 0){
 			if(si_errno == ERR_TIMEOUT && speed == HIGH){
 				speed = LOW;
 				si_setspeed(sfd, speed);
 				continue;
 			}else{
 				si_errno = ERR_UNKNOWN;
-				free(data);
-				return -1;
 			}
-		}
-		if(si_errno == ERR_NAK){
+		}else if(si_errno == ERR_NAK){
 			if(instset == NEW){
 				instset = OLD;
 				continue;
 			}else{
 				si_errno = ERR_UNKNOWN;
-				free(data);
-				return -1;
 			}
+		}else{
+			detected = 1;
 		}
-		free(data);
-		return(speed + instset);
+		break;
 	}while(1);
+	if(si_verbose > 2){
+		if(detected > 0){
+			printf("Detected SI station: %s", (instset == NEW) ? "BSM7/8" : "BSM3/4/6");
+			printf(" at speed %s.\n", (speed == HIGH) ? "HIGH" : "LOW");
+		}else{
+			puts("No SI station detected.");
+		}
+	}
+	return(speed + instset);
 }
 
+/*
+ * Set protocol to extended, autosend to OFF
+ * Return actual protocol value
+ */
+char si_station_setprot(int sfd){
+	byte cpc, cpc_old, data[DATA_CHUNK];
+	uint len;
+
+	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_GETSY, 2, O_PROTO, 1);
+//	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, 0xAA, 2, O_PROTO, 1);
+	if(len <= 0){
+		return -1;
+	}
+	cpc_old = cpc = data[5];
+	cpc |= B_EXTENDED | B_HANDSHAKE;
+	cpc &= ~B_AUTOSEND;
+
+	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
+	if(len <= 0){
+		return -1;
+	}
+	return (char) cpc_old;
+}
+
+char si_station_resetprot(int sfd, byte cpc){
+	byte data[DATA_CHUNK];
+	uint len;
+
+	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
+	if(len <= 0){
+		return -1;
+	}
+	return cpc;
+}
