@@ -22,19 +22,19 @@ int main(int argc, char *argv[]) {
 	
 	for(i = 1; i < argc; i++){
 		len = strlen(argv[i]);	
-        si_print_hex((byte *) argv[i], len);
+        si_print_hex((byte *) argv[i], len, stdout);
         len = si_frame(data, (byte *) argv[i], len);
-        si_print_hex(data, len);
+        si_print_hex(data, len, stdout);
 	}
     str = (byte *) "\xAB\x08" "Nazdarek";
     len = strlen((char *) str);
     len = si_frame(data, str, len);
-    si_print_hex(data, len);
+    si_print_hex(data, len, stdout);
     if((len = si_unframe(ufdata, data, len)) == 0){
         si_perror("Chyba unframingu");
     }else{
         puts("Unframed:");
-        si_print_hex(ufdata, len);
+        si_print_hex(ufdata, len, stdout);
     }
 	return 0;
 } 

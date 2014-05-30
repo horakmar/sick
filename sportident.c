@@ -27,39 +27,45 @@
 
 #include "sportident.h"
 
-#define ERR_OK	          0
-#define ERR_START       100
-#define ERR_UNKNOWN     100
-#define ERR_OPEN        101
-#define ERR_GETATTR     102
-#define ERR_SETATTR     103
-#define ERR_NOSTART     104
-#define ERR_MALLOC      105
-#define ERR_BADCRC      106
-#define ERR_WRITE		107
-#define ERR_READ		108
-#define ERR_TIMEOUT		109
-#define ERR_NAK			110
+#define ERR_OK	        0
+#define ERR_UNKNOWN     0
+#define ERR_OPEN        1
+#define ERR_GETATTR     2
+#define ERR_SETATTR     3
+#define ERR_NOSTART     4
+#define ERR_MALLOC      5
+#define ERR_BADCRC      6
+#define ERR_WRITE		7
+#define ERR_READ		8
+#define ERR_TIMEOUT		9
+#define ERR_NAK			10
+#define ERR_SELECT		11
+
 
 int si_errno;
 int si_verbose = 1;         // Verbose level of library
+int f_term = 0;				// Termination flag
 
 /****************************************************************************
  * Manipulate with error status
  ****************************************************************************/
-char *si_strerror(int si_errno){
+char *si_strerror(int si_err){
 	char *errors[] = {
-		"Unknown error",									// 100
-		"Cannot open serial device.",						// 101
-		"Cannot get serial device attributes.",				// 102
-		"Cannot set serial device attributes.",				// 103
-		"No start data found.",								// 104
-		"No memory left for operation.",					// 105
-		"Bad CRC."											// 106
+		"Unknown error",									// 0
+		"Cannot open serial device.",						// 1
+		"Cannot get serial device attributes.",				// 2
+		"Cannot set serial device attributes.",				// 3
+		"No start data found.",								// 4
+		"No memory left for operation.",					// 5
+		"Bad CRC.",											// 6
+		"SI write error.",									// 7
+		"SI read error.",									// 8
+		"Timeout passed.",									// 9
+		"NAK received.",									// 10
+		"Select error."										// 11
 	};
-	int errptr = si_errno - ERR_START;
-	if(errptr >= sizeof(errors) / sizeof(errors[0])) errptr = 0;
-	return(errors[errptr]);
+	if(si_err >= sizeof(errors) / sizeof(errors[0])) si_err = 0;
+	return(errors[si_err]);
 }
 
 void si_perror(char *prefix){
@@ -73,18 +79,47 @@ void si_perror(char *prefix){
  * Debug print
  ****************************************************************************/
 
-void si_print_hex(byte *data, uint len){
+void si_print_hex(byte *data, uint len, FILE *stream){
     uint i;
     char data_str[len+1];
 
     strncpy(data_str, (char *) data, len);
     data_str[len] = '\0';
-    printf("%d: ", len);
+    fprintf(stream, "%d: ", len);
     for(i = 0; i < len; i++){
-        printf("%02X ", data[i]);
+        fprintf(stream, "%02X ", data[i]);
     }
-    putchar('\n');
+    putc('\n', stream);
 }
+
+
+/****************************************************************************
+ * Data manipulation
+ ****************************************************************************/
+void si_clear_punch(S_PUNCH *punch){
+
+	punch->cn = 0;			// control number
+	punch->time = 0;		// time in sec
+	punch->dow = 0;			// day of week
+	punch->hour = 0;
+	punch->min = 0;
+	punch->sec = 0;
+	punch->msec = 0;
+}
+
+void si_clear_sidata(struct s_sidata *sidata){
+
+	sidata->cardnum = 0;
+	si_clear_punch(&sidata->start);
+	si_clear_punch(&sidata->finish);
+	si_clear_punch(&sidata->clear);
+	si_clear_punch(&sidata->check);
+	sidata->npunch = 0;		// Number of punches
+	sidata->f_24h = 0;		// Time is in 24h format
+	sidata->lname[0] = '\0';
+	sidata->fname[0] = '\0';
+}
+
 
 /****************************************************************************
  * CRC - Author: Jurgen Ehms
@@ -373,8 +408,8 @@ int si_read(int sfd, byte *buff){
     size = read(sfd, buff, DATA_CHUNK);
 	if(size > 0){
 		if(si_verbose > 2){
-			fputs("<i<< ", stdout);
-			si_print_hex(buff, size);
+			fputs("<i<< ", stderr);
+			si_print_hex(buff, size, stderr);
 		}
 	}
 	return size;
@@ -384,8 +419,8 @@ int si_write(int sfd, byte *buff, uint len){
     ssize_t size;
 
 	if(si_verbose > 2){
-		fputs(">o>> ", stdout);
-		si_print_hex(buff, len);
+		fputs(">o>> ", stderr);
+		si_print_hex(buff, len, stderr);
 	}
     return(size = write(sfd, buff, len));
 }
@@ -485,7 +520,7 @@ int si_station_detect(int sfd){
 
 	do{
 		c_setms = (instset == NEW) ? C_SETMS : U_SETMS;
-		len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, c_setms, 1, P_MSL, EOP);		// Set local communication
+		len = si_handshake(data, sfd, TIMEOUT_MS, MAX_TRIES, c_setms, 1, P_MSL, EOP);		// Set local communication
 		if(len <= 0){
 			if(si_errno == ERR_TIMEOUT && speed == HIGH){
 				speed = LOW;
@@ -525,8 +560,7 @@ char si_station_setprot(int sfd){
 	byte cpc, cpc_old, data[DATA_CHUNK];
 	uint len;
 
-	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_GETSY, 2, O_PROTO, 1);
-//	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, 0xAA, 2, O_PROTO, 1);
+	len = si_handshake(data, sfd, TIMEOUT_MS, MAX_TRIES, C_GETSY, 2, O_PROTO, 1);
 	if(len <= 0){
 		return -1;
 	}
@@ -534,20 +568,157 @@ char si_station_setprot(int sfd){
 	cpc |= B_EXTENDED | B_HANDSHAKE;
 	cpc &= ~B_AUTOSEND;
 
-	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
+	len = si_handshake(data, sfd, TIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
 	if(len <= 0){
 		return -1;
 	}
 	return (char) cpc_old;
 }
 
+/*
+ * Reset protocol to (saved) cpc value
+ */
 char si_station_resetprot(int sfd, byte cpc){
 	byte data[DATA_CHUNK];
 	uint len;
 
-	len = si_handshake(data, sfd, RTIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
+	len = si_handshake(data, sfd, TIMEOUT_MS, MAX_TRIES, C_SETSY, 2, O_PROTO, cpc);
 	if(len <= 0){
 		return -1;
 	}
 	return cpc;
+}
+
+/*
+ * Loop for reading SI cards
+ * When card is inserted, reads it, process data and write them to write_fd
+ * Both file descriptors must be opened
+ */
+int si_reader(int sfd, int write_fd, uint tick_timeout){
+	struct s_sidata sidata;
+	fd_set set_read, set_active;
+	struct timeval tm;
+	byte data_read[DATA_CHUNK], data_unframed[DATA_CHUNK];
+	int nready;
+	uint len;
+
+    FD_ZERO (&set_active);
+    FD_SET (sfd, &set_active);
+
+    while(f_term == 0){
+        set_read = set_active;
+        tm.tv_sec = tick_timeout;
+        tm.tv_usec = 0;
+        nready = select(FD_SETSIZE, &set_read, NULL, NULL, &tm);
+        if(nready == -1){
+            if(errno == EINTR){
+                continue;
+            }else{
+				si_errno = ERR_SELECT;
+                return -1;
+            }
+		}
+        if(nready > 0){
+            len = si_read(sfd, data_read);
+			if(len > 0){
+				len = si_unframe(data_unframed, data_read, len);
+				if(len > 1){		// Inserted SI card ...?
+					switch(data_unframed[0]){
+						case IN5:
+							si_read_si5(sfd, &sidata);
+							break;
+/*
+ 						case IN6:
+							si_read_si6(sfd, write_fd);
+							break;
+ 						case IN8:
+							si_read_si8(sfd, write_fd);
+							break;
+*/
+						case OUT:
+							break;
+						default:
+							if(si_verbose > 1){
+								fputs("Unexpected data: ", stderr);
+								si_print_hex(data_unframed, len, stderr);
+							}
+					}
+				}else{
+					if(si_verbose > 1){
+						fputs("Unexpected data: ", stderr);
+						si_print_hex(data_unframed, len, stderr);
+					}
+				}
+			}else{
+				if(si_verbose > 1){
+					si_perror("Eror in reading");
+				}
+			}
+        }else{
+			if(si_verbose > 3){
+	            fputs("Tick.", stderr);
+			}
+        }
+    }
+	return 0;
+
+}
+
+/*
+ * Decode SI card number
+ */
+uint32 si_cardnum(byte si3, byte si2, byte si1, byte si0){
+	uint32 cardnum;
+
+	if(si2 == 1) si2 = 0;
+	if(si2 <= 4){				// SI 5 card
+		cardnum = 100000 * si2 + (si1 << 8) + si0;
+	}else{
+		cardnum = (si2 << 16) | (si1 << 8) | si0;
+	}
+	return cardnum;
+}
+
+/*
+ * Decode 3 byte time
+ */
+void si_time3(S_PUNCH *punch, byte t1, byte t0){
+
+	punch->time = (t1 << 8) | t0;
+	if(punch->time == 0xEEEE) punch->time = 0;
+	punch->hour = (int) (punch->time / 3600);
+	punch->min  = ((int) (punch->time / 60)) % 60;
+	punch->sec  = punch->time % 60;
+	return;
+}
+
+/*
+ * Reading SI5 cards
+ */
+int si_read_si5(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data;
+	
+	si_clear_sidata(sidata);
+	len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ5, 0x00);
+	if(len > 0){
+		if(data[0] == C_READ5){
+			p_data = (byte *) data + O5_SHIFT;		// Offset of card data
+			sidata->cardnum = si_cardnum(0, p_data[O5_SI2], p_data[O5_SI1], p_data[O5_SI0]);
+			si_time3(&sidata->start, p_data[O5_ST1], p_data[O5_ST0]);
+			si_time3(&sidata->finish, p_data[O5_FT1], p_data[O5_FT0]);
+			si_time3(&sidata->check, p_data[O5_CT1], p_data[O5_CT0]);
+			printf(">>> cardnum = %d\n", sidata->cardnum);
+			printf(">>> start time = %d ... %d:%d:%d\n", sidata->start.time, sidata->start.hour, sidata->start.min, sidata->start.sec);
+			printf(">>> finish time = %d ... %d:%d:%d\n", sidata->finish.time, sidata->finish.hour, sidata->finish.min, sidata->finish.sec);
+			printf(">>> check time = %d ... %d:%d:%d\n", sidata->check.time, sidata->check.hour, sidata->check.min, sidata->check.sec);
+		}
+	}
+	
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
 }
