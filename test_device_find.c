@@ -4,12 +4,12 @@
 #include "sportident.h"
 
 int main(int argc, char* argv[]){
-	char devices[SI_DEVICES_MAX][PATH_MAX+1];
+	struct s_devices devices;
 	int num, j;
 
-	num = si_detect_devices(devices);
+	num = si_detect_devices(&devices, SI_DEVICES_MAX);
 	for(j = 0; j < num; j++){
-		printf("%d: %s\n", j, devices[j]);
+		printf("%d: %s\n", j, devices.devfiles[j]);
 	}
     return 0;
 }

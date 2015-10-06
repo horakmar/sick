@@ -40,6 +40,8 @@
 #define ERR_TIMEOUT		9
 #define ERR_NAK			10
 #define ERR_SELECT		11
+#define ERR_UNDATA		12
+#define ERR_UNKNCARD	13
 
 
 int si_errno;
@@ -62,7 +64,9 @@ char *si_strerror(int si_err){
 		"SI read error.",									// 8
 		"Timeout passed.",									// 9
 		"NAK received.",									// 10
-		"Select error."										// 11
+		"Select error.",									// 11
+		"Unexpected data.",									// 12
+		"Unknown SI card."									// 13
 	};
 	if(si_err >= sizeof(errors) / sizeof(errors[0])) si_err = 0;
 	return(errors[si_err]);
@@ -92,6 +96,36 @@ void si_print_hex(byte *data, uint len, FILE *stream){
     putc('\n', stream);
 }
 
+char *si_timestr(char *time, S_PUNCH *punch){
+
+	if(punch->timestat == NONE){
+		strcpy(time, "--");
+	}else{
+		sprintf(time, "%02d:%02d:%02d", punch->hour, punch->min, punch->sec);
+	}
+	return time;
+}
+
+void si_print_card(struct s_sidata *card, FILE *stream){
+	int i;
+	char time[16];
+
+	fputs("===================================\n", stream);
+	fprintf(stream, "SI: %d\n", card->cardnum);
+	fprintf(stream, "Name: %s %s\n", card->fname, card->lname);
+	fputs("===================================\n", stream);
+
+	fprintf(stream, "Clear:  %s\n", si_timestr(time, &card->clear));
+	fprintf(stream, "Check:  %s\n", si_timestr(time, &card->check));
+	fprintf(stream, "Start:  %s\n", si_timestr(time, &card->start));
+	fprintf(stream, "Finish: %s\n", si_timestr(time, &card->finish));
+	fputs("-----------------------------------\n", stream);
+	for(i = 0; i < card->npunch; i++){
+		fprintf(stream, "%3d ... %s\n", card->punches[i].cn, si_timestr(time, &card->punches[i]));
+	}
+	fputs("===================================\n", stream);
+}
+
 
 /****************************************************************************
  * Data manipulation
@@ -105,6 +139,7 @@ void si_clear_punch(S_PUNCH *punch){
 	punch->min = 0;
 	punch->sec = 0;
 	punch->msec = 0;
+	punch->timestat = NONE;
 }
 
 void si_clear_sidata(struct s_sidata *sidata){
@@ -115,7 +150,6 @@ void si_clear_sidata(struct s_sidata *sidata){
 	si_clear_punch(&sidata->clear);
 	si_clear_punch(&sidata->check);
 	sidata->npunch = 0;		// Number of punches
-	sidata->f_24h = 0;		// Time is in 24h format
 	sidata->lname[0] = '\0';
 	sidata->fname[0] = '\0';
 }
@@ -177,7 +211,7 @@ uint16 j, Sum, Sum1;
 #define SI_PRODUCT_ID "800a"
 
 /* Recursive filesystem search */
-static int walk(char result[][PATH_MAX+1], int j){
+static int walk(struct s_devices *devices, int max_dev){
     uint    SI_ID_LEN = strlen(SI_VENDOR_ID);
     uint    SI_DEV_PATTERN_LEN = strlen(SI_DEV_PATTERN);
 	DIR    *dir;
@@ -185,10 +219,10 @@ static int walk(char result[][PATH_MAX+1], int j){
 	FILE   *fi_idv, *fi_idp; 
 	char   idv[SI_ID_LEN], idp[SI_ID_LEN];
 
-    if(j >= SI_DEVICES_MAX) return j;
+    if(devices->count >= max_dev) return devices->count;
 	if((dir = opendir(".")) == NULL){
 		error(0, errno, "Cannot opendir.");
-		return j;
+		return devices->count;
 	}
 	while((d = readdir(dir))){
 		if(strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0){
@@ -196,7 +230,7 @@ static int walk(char result[][PATH_MAX+1], int j){
 		}
 		if(d->d_type == DT_DIR){
 			if(chdir(d->d_name) == 0){
-    			j = walk(result, j);
+    			walk(devices, max_dev);
                 chdir("..");
             }else{
                 error(0, errno, "Cannot open directory %s", d->d_name);
@@ -209,7 +243,11 @@ static int walk(char result[][PATH_MAX+1], int j){
 					strncmp(idv, SI_VENDOR_ID, SI_ID_LEN) == 0 &&
 					fread(idp, SI_ID_LEN, 1, fi_idp) > 0 &&
 					strncmp(idp, SI_PRODUCT_ID, SI_ID_LEN) == 0){
-						strcpy(result[j++], d->d_name);
+						if((devices->devfiles[devices->count] = malloc(sizeof(d->d_name))) == NULL){
+							si_errno = ERR_MALLOC;
+							return 0;
+						}
+						strcpy(devices->devfiles[devices->count++], d->d_name);
 					}
 					fclose(fi_idp);
 				}
@@ -218,32 +256,33 @@ static int walk(char result[][PATH_MAX+1], int j){
 		}
 	}
 	closedir(dir);
-	return j;
+	return devices->count;
 }
 
-int si_detect_devices(char result[][PATH_MAX+1]){
-	int i, j = 0;
+int si_detect_devices(struct s_devices *devices, int max_dev){
+	int i = 0;
     char filename[PATH_MAX+1];
 	char cur_dir[PATH_MAX+1];
 
+	devices->count = 0;
 	getcwd(cur_dir, PATH_MAX);
 	if(chdir(SI_SEARCHDIR) != 0){
 		error(0, errno, "Cannot change to directory %s", SI_SEARCHDIR);
 		return 0;
 	}
-	j = walk(result, j);
+	walk(devices, max_dev);
 	if(si_verbose > 2){
 		puts("Detected devices:");
 	}
-    for(i = 0; i < j; i++){
-        strcpy(filename, result[i]);
-        strcpy(result[i], SI_DEV_PREFIX);
-        strcat(result[i], filename);
+    for(i = 0; i < devices->count; i++){
+        strcpy(filename, devices->devfiles[i]);
+        strcpy(devices->devfiles[i], SI_DEV_PREFIX);
+        strcat(devices->devfiles[i], filename);
 		if(si_verbose > 2){
-			printf("%d: %s\n", i, result[i]);
+			printf("%d: %s\n", i, devices->devfiles[i]);
 		}
     }
-	return j;
+	return devices->count;
 }
 
 /****************************************************************************
@@ -255,11 +294,11 @@ int si_initserial(char *serial_device){
     struct termios init_termset, termset;
     sfd = open(serial_device, O_RDWR);
     if(sfd == -1){
-        si_errno = 101;        // Cannot open serial device
+        si_errno = ERR_OPEN;        // Cannot open serial device
         return(-1);
     }
     if(tcgetattr(sfd, &init_termset) == -1){
-        si_errno = 102;        // Cannot get serial device attributes
+        si_errno = ERR_GETATTR;        // Cannot get serial device attributes
         return(-1);
     }
     termset = init_termset;
@@ -271,7 +310,7 @@ int si_initserial(char *serial_device){
     cfsetispeed(&termset, B38400);
 
     if(tcsetattr(sfd, TCSANOW, &termset) == -1){
-        si_errno = 103;        // Cannot set serial device attributes
+        si_errno = ERR_SETATTR;        // Cannot set serial device attributes
         return(-1);
     }
 
@@ -282,12 +321,12 @@ int si_initserial(char *serial_device){
 int si_settimeout(int sfd, int timeout){
     struct termios termset;
     if(tcgetattr(sfd, &termset)){
-        si_errno = 102;        // Cannot get serial device attributes
+        si_errno = ERR_GETATTR;        // Cannot get serial device attributes
         return(-1);
     }
     termset.c_cc[VTIME] = timeout;
     if(tcsetattr(sfd, TCSANOW, &termset)){
-        si_errno = 103;        // Cannot set serial device attributes
+        si_errno = ERR_SETATTR;        // Cannot set serial device attributes
         return(-1);
     }
     return(1);
@@ -302,13 +341,13 @@ int si_setspeed(int sfd, E_SPEED speed){
         case HIGH: termspeed = B38400; break;
     }
     if(tcgetattr(sfd, &termset)){
-        si_errno = 102;        // Cannot get serial device attributes
+        si_errno = ERR_GETATTR;        // Cannot get serial device attributes
         return(-1);
     }
     cfsetispeed(&termset, termspeed);
     cfsetospeed(&termset, termspeed);
     if(tcsetattr(sfd, TCSANOW, &termset)){
-        si_errno = 103;        // Cannot set serial device attributes
+        si_errno = ERR_SETATTR;        // Cannot set serial device attributes
         return(-1);
     }
     return(1);
@@ -623,18 +662,17 @@ int si_reader(int sfd, int write_fd, uint tick_timeout){
 			if(len > 0){
 				len = si_unframe(data_unframed, data_read, len);
 				if(len > 1){		// Inserted SI card ...?
+					si_clear_sidata(&sidata);
 					switch(data_unframed[0]){
 						case IN5:
 							si_read_si5(sfd, &sidata);
 							break;
-/*
  						case IN6:
-							si_read_si6(sfd, write_fd);
+							si_read_si6(sfd, &sidata);
 							break;
  						case IN8:
-							si_read_si8(sfd, write_fd);
+							si_read_si8(sfd, &sidata);
 							break;
-*/
 						case OUT:
 							break;
 						default:
@@ -642,6 +680,10 @@ int si_reader(int sfd, int write_fd, uint tick_timeout){
 								fputs("Unexpected data: ", stderr);
 								si_print_hex(data_unframed, len, stderr);
 							}
+
+					}
+					if(sidata.cardnum > 0){
+						si_print_card(&sidata, stdout);
 					}
 				}else{
 					if(si_verbose > 1){
@@ -680,12 +722,35 @@ uint32 si_cardnum(byte si3, byte si2, byte si1, byte si0){
 }
 
 /*
- * Decode 3 byte time
+ * Decode 2 byte time
  */
-void si_time3(S_PUNCH *punch, byte t1, byte t0){
+void si_time3(S_PUNCH *punch, byte *t, char detect_null){
 
-	punch->time = (t1 << 8) | t0;
-	if(punch->time == 0xEEEE) punch->time = 0;
+	punch->time = (*t << 8) + *(t+1);
+	if(detect_null == NULL_OK && punch->time == 0xEEEE){
+		punch->time = 0;
+		punch->timestat = NONE;
+	}else{
+		punch->timestat = H12;
+	}
+	punch->hour = (int) (punch->time / 3600);
+	punch->min  = ((int) (punch->time / 60)) % 60;
+	punch->sec  = punch->time % 60;
+	return;
+}
+
+/*
+ * Decode 4 byte time
+ */
+void si_time4(S_PUNCH *punch, byte *t, char detect_null){
+
+	punch->time = (*t & 0x01) * 43200 + (*(t+2) << 8) + *(t+3);
+	if(detect_null == NULL_OK && punch->time == 0xEEEE){
+		punch->time = 0;
+		punch->timestat = NONE;
+	}else{
+		punch->timestat = H24;
+	}
 	punch->hour = (int) (punch->time / 3600);
 	punch->min  = ((int) (punch->time / 60)) % 60;
 	punch->sec  = punch->time % 60;
@@ -699,21 +764,35 @@ int si_read_si5(int sfd, struct s_sidata *sidata){
 	int len, len_ack;
 	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
 	byte *p_data;
+	int offset, i;
 	
-	si_clear_sidata(sidata);
 	len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ5, 0x00);
 	if(len > 0){
 		if(data[0] == C_READ5){
 			p_data = (byte *) data + O5_SHIFT;		// Offset of card data
-			sidata->cardnum = si_cardnum(0, p_data[O5_SI2], p_data[O5_SI1], p_data[O5_SI0]);
-			si_time3(&sidata->start, p_data[O5_ST1], p_data[O5_ST0]);
-			si_time3(&sidata->finish, p_data[O5_FT1], p_data[O5_FT0]);
-			si_time3(&sidata->check, p_data[O5_CT1], p_data[O5_CT0]);
-			printf(">>> cardnum = %d\n", sidata->cardnum);
-			printf(">>> start time = %d ... %d:%d:%d\n", sidata->start.time, sidata->start.hour, sidata->start.min, sidata->start.sec);
-			printf(">>> finish time = %d ... %d:%d:%d\n", sidata->finish.time, sidata->finish.hour, sidata->finish.min, sidata->finish.sec);
-			printf(">>> check time = %d ... %d:%d:%d\n", sidata->check.time, sidata->check.hour, sidata->check.min, sidata->check.sec);
+			sidata->cardnum = si_cardnum(0, p_data[O5_CN2], p_data[O5_CN1], p_data[O5_CN0]);
+			si_time3(&sidata->start, p_data+O5_ST, NULL_OK);
+			si_time3(&sidata->finish, p_data+O5_FT, NULL_OK);
+			si_time3(&sidata->check, p_data+O5_CT, NULL_OK);
+			sidata->npunch = p_data[O5_PP] - 1;
+			for(i = 0; i < sidata->npunch; i++){
+				if(i >= 30){									// Punches 31 - 36 are without time
+					offset = O5_PUNCH + (i - 30) * 0x10;
+					sidata->punches[i].cn = p_data[offset];
+					sidata->punches[i].timestat = NONE;
+				}else{
+					offset = O5_PUNCH+1 + 3*i + (int) i/5;
+					sidata->punches[i].cn = p_data[offset];
+					si_time3(&sidata->punches[i], p_data+offset+1, NULL_NO);
+				}
+			}
+		}else{
+			si_errno = ERR_UNDATA;
+			return -1;
 		}
+	}else{
+        // si_errno set in si_handshake
+		return -1;
 	}
 	
 	/* Send ACK to commit finished reading */
@@ -721,4 +800,151 @@ int si_read_si5(int sfd, struct s_sidata *sidata){
 	si_write(sfd, data_ack_framed, len_ack);
 
 	return len;
+}
+
+/*
+ * Reading SI8 - SI10 cards
+ */
+int si_read_si8(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data, *p_lname;
+	byte block = 0;
+	int offset, i;
+	
+	do{
+		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ8, 0x01, block);
+		if(len > 0){
+			if(data[0] == C_READ8){
+				if(block == 0){					// First block
+					p_data = (byte *) data + O8_SHIFT;		// Offset of card data
+					sidata->cardnum = si_cardnum(p_data[O8_CN], p_data[O8_CN+1], p_data[O8_CN+2], p_data[O8_CN+3]);
+					si_time4(&sidata->start, p_data+O8_ST, NULL_OK);
+					si_time4(&sidata->finish, p_data+O8_FT, NULL_OK);
+					si_time4(&sidata->check, p_data+O8_CT, NULL_OK);
+                    p_lname = si_name_read((char *) &sidata->fname, p_data+O8_OWN);
+                    si_name_read((char *) &sidata->lname, p_lname);
+					sidata->npunch = p_data[O8_PP];
+                    i = 0;
+					switch(p_data[O8_CN]){
+						case ID_SI9:
+							offset = O9_PUNCH;
+							break;
+						case ID_SI8:
+							offset = O8_PUNCH;
+							break;
+						case ID_SIp:
+							offset = Op_PUNCH;
+							break;
+						case ID_SIt:
+							offset = Ot_PUNCH;
+							break;
+						case ID_SI10:
+							offset = O10_PUNCH;
+							break;
+						default:
+							si_errno = ERR_UNKNCARD;
+							return -1;
+					}
+				}
+                while(i < sidata->npunch && offset < BLOCK_SIZE){
+                    sidata->punches[i].cn = p_data[offset+1];
+                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
+                    i++; offset += 4;
+				}
+			}else{
+                si_errno = ERR_UNDATA;
+                return -1;
+            }
+		}else{
+            // si_errno set in si_handshake
+            return -1;
+        }
+        // Skip blocks we do not need
+        while(offset >= BLOCK_SIZE){
+            block++;
+            offset -= BLOCK_SIZE;
+        }
+	}while(i < sidata->npunch);
+
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
+}
+
+/*
+ * Reading SI6 cards
+ */
+int si_read_si6(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data;
+	byte block = 0;
+	int offset, i;
+	
+	do{
+		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ6, 0x01, block);
+		if(len > 0){
+			if(data[0] == C_READ6){
+				if(block == 0){					            // First block
+					p_data = (byte *) data + O6_SHIFT;		// Offset of card data
+					sidata->cardnum = si_cardnum(p_data[O6_CN], p_data[O6_CN+1], p_data[O6_CN+2], p_data[O6_CN+3]);
+					si_time4(&sidata->start, p_data+O6_ST, NULL_OK);
+					si_time4(&sidata->finish, p_data+O6_FT, NULL_OK);
+					si_time4(&sidata->check, p_data+O6_CT, NULL_OK);
+					si_time4(&sidata->clear, p_data+O6_ET, NULL_OK);
+                    si_name_read((char *) &sidata->fname, p_data+O6_FN);
+                    si_name_read((char *) &sidata->lname, p_data+O6_LN);
+					sidata->npunch = p_data[O6_PP];
+                    i = 0;
+                    offset = O6_PUNCH;
+				}
+                while(i < sidata->npunch && offset < BLOCK_SIZE){
+                    sidata->punches[i].cn = p_data[offset+1];
+                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
+                    i++; offset += 4;
+				}
+			}else{
+                si_errno = ERR_UNDATA;
+                return -1;
+            }
+		}else{
+            // si_errno set in si_handshake
+            return -1;
+        }
+        // Skip blocks we do not need
+        while(offset >= BLOCK_SIZE){
+            block++;
+            offset -= BLOCK_SIZE;
+        }
+	}while(i < sidata->npunch);
+
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
+}
+
+/*
+ * Reading name
+ * End with double space, 20 chars or semicolon
+ */
+byte *si_name_read(char *name, byte *data){
+    int i;
+
+    if(*data >= 'A' || *data <= 'z'){
+        for(i = 0; i < SI_NAME_MAX; i++){
+            if(data[i] == ';' || (data[i] == ' ' && (i == SI_NAME_MAX-1 || data[i+1] == ' '))){
+                i++;     // Dirty hack to shift on next name
+                break;
+            }
+            *name = data[i];
+            name++;
+        }
+    }
+    *name = '\0';
+    return data+i;
 }

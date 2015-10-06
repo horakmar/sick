@@ -17,24 +17,24 @@ void termination_handler(int signum){
 }
 
 int main (void){
-	char devices[SI_DEVICES_MAX][PATH_MAX+1];
-	int devices_num = 0;
     int i, sfd;
 	char prot_old;
+	struct s_devices devices;
+	devices.count = 0;
 
 	si_verbose = 3;		// set si library verbose level
 
-	if((devices_num = si_detect_devices(devices)) == 0){
+	if(si_detect_devices(&devices, SI_DEVICES_MAX) == 0){
 		error(EXIT_FAILURE, 0, "No devices detected.");
 	}
-	for(i = 0; i < devices_num; i++){
-		if((sfd = si_initserial(devices[i])) != -1){
+	for(i = 0; i < devices.count; i++){
+		if((sfd = si_initserial(devices.devfiles[i])) != -1){
 			break;
     	}else{
-			error(EXIT_SUCCESS, errno, "Cannot open device %s.", devices[i]);
+			error(EXIT_SUCCESS, errno, "Cannot open device %s", devices.devfiles[i]);
 		}
 	}
-	if(i >= devices_num){
+	if(i >= devices.count){
 		error(EXIT_FAILURE, 0, "No devices can be opened.");
 	}
 
