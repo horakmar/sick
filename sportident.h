@@ -71,16 +71,18 @@ typedef struct s_punch {
     E_TSTAT timestat;
 } S_PUNCH;
 
-#define SI_DEVICES_MAX 4
-struct s_devices {
-	int 	count;
-	char	*devfiles[SI_DEVICES_MAX];
+struct s_dev {
+	char	*devfile;   // Name of device file (/dev/ttyUSB0)
+    int     fd;         // Device file descriptor after opening
+    char    prot;       // Station current protocol (for saving)
+	struct  s_dev *next;
 };
 
 #define SI_NAME_MAX 20          // Max length of name on SI card
 #define PUNCHES_MAX 128
 struct s_sidata {
     uint32  cardnum;
+    int cardtype;
     S_PUNCH start;
     S_PUNCH finish;
     S_PUNCH clear;
@@ -118,12 +120,13 @@ int si_write(int sfd, byte *buff, uint len);
 
 int si_read_timeout(int sfd, int timeout);
 
-int si_detect_devices(struct s_devices *devices, int max_dev);
+int si_detect_devices(struct s_dev **dev_first);
 uint si_handshake(byte *data_out, int sfd, int timeout, int tries, ...);
 int si_station_detect(int sfd);
 char si_station_setprot(int sfd);
 char si_station_resetprot(int sfd, byte cpc);
 int si_reader(int sfd, int write_fd, uint tick_timeout);
+int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout);
 int si_read_si5(int sfd, struct s_sidata *sidata);
 
 uint32 si_cardnum(byte si3, byte si2, byte si1, byte si0);
@@ -131,4 +134,4 @@ void si_time3(S_PUNCH *punch, byte *t, char detect_null);
 void si_time4(S_PUNCH *punch, byte *t, char detect_null);
 int si_read_si8(int sfd, struct s_sidata *sidata);
 int si_read_si6(int sfd, struct s_sidata *sidata);
-byte *si_name_read(char *name, byte *data);
+byte *si_name(char *name, byte *data);

@@ -111,7 +111,7 @@ void si_print_card(struct s_sidata *card, FILE *stream){
 	char time[16];
 
 	fputs("===================================\n", stream);
-	fprintf(stream, "SI: %d\n", card->cardnum);
+	fprintf(stream, "SI: %d (type %d)\n", card->cardnum, card->cardtype);
 	fprintf(stream, "Name: %s %s\n", card->fname, card->lname);
 	fputs("===================================\n", stream);
 
@@ -145,6 +145,7 @@ void si_clear_punch(S_PUNCH *punch){
 void si_clear_sidata(struct s_sidata *sidata){
 
 	sidata->cardnum = 0;
+	sidata->cardtype = 0;
 	si_clear_punch(&sidata->start);
 	si_clear_punch(&sidata->finish);
 	si_clear_punch(&sidata->clear);
@@ -203,7 +204,6 @@ uint16 j, Sum, Sum1;
 /****************************************************************************
  * SI hardware detection
  ****************************************************************************/
-#define SI_DEVICES_MAX 4
 #define SI_DEV_PREFIX "/dev/"
 #define SI_SEARCHDIR "/sys/devices"
 #define SI_DEV_PATTERN "ttyUSB"
@@ -211,18 +211,18 @@ uint16 j, Sum, Sum1;
 #define SI_PRODUCT_ID "800a"
 
 /* Recursive filesystem search */
-static int walk(struct s_devices *devices, int max_dev){
+static int walk(struct s_dev **dev_first, struct s_dev **dev_last){
     uint    SI_ID_LEN = strlen(SI_VENDOR_ID);
     uint    SI_DEV_PATTERN_LEN = strlen(SI_DEV_PATTERN);
-	DIR    *dir;
-	struct dirent *d;
-	FILE   *fi_idv, *fi_idp; 
-	char   idv[SI_ID_LEN], idp[SI_ID_LEN];
+	DIR     *dir;
+	struct  dirent *d;
+	FILE    *fi_idv, *fi_idp; 
+	char    idv[SI_ID_LEN], idp[SI_ID_LEN];
+	struct  s_dev *p_dev;
 
-    if(devices->count >= max_dev) return devices->count;
 	if((dir = opendir(".")) == NULL){
 		error(0, errno, "Cannot opendir.");
-		return devices->count;
+		return 0;
 	}
 	while((d = readdir(dir))){
 		if(strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0){
@@ -230,7 +230,10 @@ static int walk(struct s_devices *devices, int max_dev){
 		}
 		if(d->d_type == DT_DIR){
 			if(chdir(d->d_name) == 0){
-    			walk(devices, max_dev);
+                if(si_verbose > 2){
+                    printf(">>> Entering directory %s\n", d->d_name);
+                }
+    			walk(dev_first, dev_last);
                 chdir("..");
             }else{
                 error(0, errno, "Cannot open directory %s", d->d_name);
@@ -243,11 +246,21 @@ static int walk(struct s_devices *devices, int max_dev){
 					strncmp(idv, SI_VENDOR_ID, SI_ID_LEN) == 0 &&
 					fread(idp, SI_ID_LEN, 1, fi_idp) > 0 &&
 					strncmp(idp, SI_PRODUCT_ID, SI_ID_LEN) == 0){
-						if((devices->devfiles[devices->count] = malloc(sizeof(d->d_name))) == NULL){
-							si_errno = ERR_MALLOC;
-							return 0;
+						if((p_dev = (struct s_dev *) malloc(sizeof(struct s_dev))) == NULL){
+							error(1, errno, "Cannot malloc.");
 						}
-						strcpy(devices->devfiles[devices->count++], d->d_name);
+						if((p_dev->devfile = malloc(sizeof(d->d_name) + sizeof(SI_DEV_PREFIX))) == NULL){
+							error(1, errno, "Cannot malloc.");
+						}
+						strcpy(p_dev->devfile, SI_DEV_PREFIX);
+                        strcat(p_dev->devfile, d->d_name);
+                        p_dev->next = NULL;
+						if(*dev_first == NULL){
+                            *dev_first = p_dev;
+                        }else{
+							(*dev_last)->next = p_dev;
+						}
+						*dev_last = p_dev;
 					}
 					fclose(fi_idp);
 				}
@@ -256,33 +269,33 @@ static int walk(struct s_devices *devices, int max_dev){
 		}
 	}
 	closedir(dir);
-	return devices->count;
+	return 1;
 }
 
-int si_detect_devices(struct s_devices *devices, int max_dev){
-	int i = 0;
-    char filename[PATH_MAX+1];
-	char cur_dir[PATH_MAX+1];
+int si_detect_devices(struct s_dev **dev_first){
+	struct s_dev *i = NULL;
+	uint   count = 0;
+	char   cur_dir[PATH_MAX+1];
 
-	devices->count = 0;
 	getcwd(cur_dir, PATH_MAX);
 	if(chdir(SI_SEARCHDIR) != 0){
-		error(0, errno, "Cannot change to directory %s", SI_SEARCHDIR);
+		error(0, errno, "Cannot change to directory %s.", SI_SEARCHDIR);
 		return 0;
 	}
-	walk(devices, max_dev);
+    *dev_first = NULL;
+    walk(dev_first, &i);
 	if(si_verbose > 2){
 		puts("Detected devices:");
 	}
-    for(i = 0; i < devices->count; i++){
-        strcpy(filename, devices->devfiles[i]);
-        strcpy(devices->devfiles[i], SI_DEV_PREFIX);
-        strcat(devices->devfiles[i], filename);
+	i = *dev_first;
+    while(i != NULL){
+		count++;
 		if(si_verbose > 2){
-			printf("%d: %s\n", i, devices->devfiles[i]);
+			printf("%d: %s\n", count, i->devfile);
 		}
+		i = i->next;
     }
-	return devices->count;
+	return count;
 }
 
 /****************************************************************************
@@ -628,6 +641,190 @@ char si_station_resetprot(int sfd, byte cpc){
 	return cpc;
 }
 
+/****************************************************************************
+ * Card readers
+ ****************************************************************************/
+/*
+ * Reading SI5 cards
+ */
+int si_read_si5(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data;
+	int offset, i;
+	
+	len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ5, 0x00);
+	if(len > 0){
+		if(data[0] == C_READ5){
+			p_data = (byte *) data + O5_SHIFT;		// Offset of card data
+            sidata->cardtype = 5;
+			sidata->cardnum = si_cardnum(0, p_data[O5_CN2], p_data[O5_CN1], p_data[O5_CN0]);
+			si_time3(&sidata->start, p_data+O5_ST, NULL_OK);
+			si_time3(&sidata->finish, p_data+O5_FT, NULL_OK);
+			si_time3(&sidata->check, p_data+O5_CT, NULL_OK);
+			sidata->npunch = p_data[O5_PP] - 1;
+			for(i = 0; i < sidata->npunch; i++){
+				if(i >= 30){									// Punches 31 - 36 are without time
+					offset = O5_PUNCH + (i - 30) * 0x10;
+					sidata->punches[i].cn = p_data[offset];
+					sidata->punches[i].timestat = NONE;
+				}else{
+					offset = O5_PUNCH+1 + 3*i + (int) i/5;
+					sidata->punches[i].cn = p_data[offset];
+					si_time3(&sidata->punches[i], p_data+offset+1, NULL_NO);
+				}
+			}
+		}else{
+			si_errno = ERR_UNDATA;
+			return -1;
+		}
+	}else{
+        // si_errno set in si_handshake
+		return -1;
+	}
+	
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
+}
+
+/*
+ * Reading SI6 cards
+ */
+int si_read_si6(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data;
+	byte block = 0;
+	int offset, i;
+	
+	do{
+		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ6, 0x01, block);
+		if(len > 0){
+			if(data[0] == C_READ6){
+				if(block == 0){					            // First block
+					p_data = (byte *) data + O6_SHIFT;		// Offset of card data
+                    sidata->cardtype = 6;
+					sidata->cardnum = si_cardnum(p_data[O6_CN], p_data[O6_CN+1], p_data[O6_CN+2], p_data[O6_CN+3]);
+					si_time4(&sidata->start, p_data+O6_ST, NULL_OK);
+					si_time4(&sidata->finish, p_data+O6_FT, NULL_OK);
+					si_time4(&sidata->check, p_data+O6_CT, NULL_OK);
+					si_time4(&sidata->clear, p_data+O6_ET, NULL_OK);
+                    si_name((char *) &sidata->fname, p_data+O6_FN);
+                    si_name((char *) &sidata->lname, p_data+O6_LN);
+					sidata->npunch = p_data[O6_PP];
+                    i = 0;
+                    offset = O6_PUNCH;
+				}
+                while(i < sidata->npunch && offset < BLOCK_SIZE){
+                    sidata->punches[i].cn = p_data[offset+1];
+                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
+                    i++; offset += 4;
+				}
+			}else{
+                si_errno = ERR_UNDATA;
+                return -1;
+            }
+		}else{
+            // si_errno set in si_handshake
+            return -1;
+        }
+        // Skip blocks we do not need
+        while(offset >= BLOCK_SIZE){
+            block++;
+            offset -= BLOCK_SIZE;
+        }
+	}while(i < sidata->npunch);
+
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
+}
+
+/*
+ * Reading SI8 - SI10 cards
+ */
+int si_read_si8(int sfd, struct s_sidata *sidata){
+	int len, len_ack;
+	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
+	byte *p_data, *p_lname;
+	byte block = 0;
+	int offset, i;
+	
+	do{
+		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ8, 0x01, block);
+		if(len > 0){
+			if(data[0] == C_READ8){
+				if(block == 0){					// First block
+					p_data = (byte *) data + O8_SHIFT;		// Offset of card data
+					sidata->cardnum = si_cardnum(p_data[O8_CN], p_data[O8_CN+1], p_data[O8_CN+2], p_data[O8_CN+3]);
+					si_time4(&sidata->start, p_data+O8_ST, NULL_OK);
+					si_time4(&sidata->finish, p_data+O8_FT, NULL_OK);
+					si_time4(&sidata->check, p_data+O8_CT, NULL_OK);
+                    p_lname = si_name((char *) &sidata->fname, p_data+O8_OWN);
+                    si_name((char *) &sidata->lname, p_lname);
+					sidata->npunch = p_data[O8_PP];
+                    i = 0;
+					switch(p_data[O8_CN]){
+						case ID_SI8:
+                            sidata->cardtype = 8;
+							offset = O8_PUNCH;
+							break;
+						case ID_SI9:
+                            sidata->cardtype = 9;
+							offset = O9_PUNCH;
+							break;
+						case ID_SIp:
+                            sidata->cardtype = 21;
+							offset = Op_PUNCH;
+							break;
+						case ID_SIt:
+                            sidata->cardtype = 22;
+							offset = Ot_PUNCH;
+							break;
+						case ID_SI10:
+                            sidata->cardtype = 10;
+							offset = O10_PUNCH;
+							break;
+						default:
+							si_errno = ERR_UNKNCARD;
+							return -1;
+					}
+				}
+                while(i < sidata->npunch && offset < BLOCK_SIZE){
+                    sidata->punches[i].cn = p_data[offset+1];
+                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
+                    i++; offset += 4;
+				}
+			}else{
+                si_errno = ERR_UNDATA;
+                return -1;
+            }
+		}else{
+            // si_errno set in si_handshake
+            return -1;
+        }
+        // Skip blocks we do not need
+        while(offset >= BLOCK_SIZE){
+            block++;
+            offset -= BLOCK_SIZE;
+        }
+	}while(i < sidata->npunch);
+
+	/* Send ACK to commit finished reading */
+	len_ack = si_frame(data_ack_framed, data_ack, 1);
+	si_write(sfd, data_ack_framed, len_ack);
+
+	return len;
+}
+
+/****************************************************************************
+ * Reader loops.
+ ****************************************************************************/
 /*
  * Loop for reading SI cards
  * When card is inserted, reads it, process data and write them to write_fd
@@ -706,6 +903,100 @@ int si_reader(int sfd, int write_fd, uint tick_timeout){
 
 }
 
+/* 
+ * "Multi" reader - can read from more SI stations
+ */
+int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout){
+	struct s_sidata sidata;
+	fd_set set_read, set_active;
+	struct timeval tm;
+	byte data_read[DATA_CHUNK], data_unframed[DATA_CHUNK];
+	int nready, sfd;
+	uint len;
+    struct s_dev *dev;
+
+    FD_ZERO (&set_active);
+    dev = first_dev;
+    while(dev != NULL){
+        FD_SET (dev->fd, &set_active);
+        dev = dev->next;
+    }
+
+    while(f_term == 0){
+        set_read = set_active;
+        tm.tv_sec = tick_timeout;
+        tm.tv_usec = 0;
+        sfd = -1;               // Active FD
+        nready = select(FD_SETSIZE, &set_read, NULL, NULL, &tm);
+        if(nready == -1){
+            if(errno == EINTR){
+                continue;
+            }else{
+				si_errno = ERR_SELECT;
+                return -1;
+            }
+		}
+        if(nready > 0){
+            dev = first_dev;
+            while(dev != NULL){
+                if(FD_ISSET(dev->fd, &set_read)){
+                    sfd = dev->fd;
+                    break;
+                }
+                dev = dev->next;
+            }
+            if(sfd == -1) continue;
+            len = si_read(sfd, data_read);
+			if(len > 0){
+				len = si_unframe(data_unframed, data_read, len);
+				if(len > 1){		// Inserted SI card ...?
+					si_clear_sidata(&sidata);
+					switch(data_unframed[0]){
+						case IN5:
+							si_read_si5(sfd, &sidata);
+							break;
+ 						case IN6:
+							si_read_si6(sfd, &sidata);
+							break;
+ 						case IN8:
+							si_read_si8(sfd, &sidata);
+							break;
+						case OUT:
+							break;
+						default:
+							if(si_verbose > 1){
+								fputs("Unexpected data: ", stderr);
+								si_print_hex(data_unframed, len, stderr);
+							}
+
+					}
+					if(sidata.cardnum > 0){
+						si_print_card(&sidata, stdout);
+					}
+				}else{
+					if(si_verbose > 1){
+						fputs("Unexpected data: ", stderr);
+						si_print_hex(data_unframed, len, stderr);
+					}
+				}
+			}else{
+				if(si_verbose > 1){
+					si_perror("Eror in reading");
+				}
+			}
+        }else{
+			if(si_verbose > 3){
+	            fputs("Tick.", stderr);
+			}
+        }
+    }
+	return 0;
+
+}
+
+/****************************************************************************
+ * Decoders
+ ****************************************************************************/
 /*
  * Decode SI card number
  */
@@ -758,181 +1049,10 @@ void si_time4(S_PUNCH *punch, byte *t, char detect_null){
 }
 
 /*
- * Reading SI5 cards
- */
-int si_read_si5(int sfd, struct s_sidata *sidata){
-	int len, len_ack;
-	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
-	byte *p_data;
-	int offset, i;
-	
-	len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ5, 0x00);
-	if(len > 0){
-		if(data[0] == C_READ5){
-			p_data = (byte *) data + O5_SHIFT;		// Offset of card data
-			sidata->cardnum = si_cardnum(0, p_data[O5_CN2], p_data[O5_CN1], p_data[O5_CN0]);
-			si_time3(&sidata->start, p_data+O5_ST, NULL_OK);
-			si_time3(&sidata->finish, p_data+O5_FT, NULL_OK);
-			si_time3(&sidata->check, p_data+O5_CT, NULL_OK);
-			sidata->npunch = p_data[O5_PP] - 1;
-			for(i = 0; i < sidata->npunch; i++){
-				if(i >= 30){									// Punches 31 - 36 are without time
-					offset = O5_PUNCH + (i - 30) * 0x10;
-					sidata->punches[i].cn = p_data[offset];
-					sidata->punches[i].timestat = NONE;
-				}else{
-					offset = O5_PUNCH+1 + 3*i + (int) i/5;
-					sidata->punches[i].cn = p_data[offset];
-					si_time3(&sidata->punches[i], p_data+offset+1, NULL_NO);
-				}
-			}
-		}else{
-			si_errno = ERR_UNDATA;
-			return -1;
-		}
-	}else{
-        // si_errno set in si_handshake
-		return -1;
-	}
-	
-	/* Send ACK to commit finished reading */
-	len_ack = si_frame(data_ack_framed, data_ack, 1);
-	si_write(sfd, data_ack_framed, len_ack);
-
-	return len;
-}
-
-/*
- * Reading SI8 - SI10 cards
- */
-int si_read_si8(int sfd, struct s_sidata *sidata){
-	int len, len_ack;
-	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
-	byte *p_data, *p_lname;
-	byte block = 0;
-	int offset, i;
-	
-	do{
-		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ8, 0x01, block);
-		if(len > 0){
-			if(data[0] == C_READ8){
-				if(block == 0){					// First block
-					p_data = (byte *) data + O8_SHIFT;		// Offset of card data
-					sidata->cardnum = si_cardnum(p_data[O8_CN], p_data[O8_CN+1], p_data[O8_CN+2], p_data[O8_CN+3]);
-					si_time4(&sidata->start, p_data+O8_ST, NULL_OK);
-					si_time4(&sidata->finish, p_data+O8_FT, NULL_OK);
-					si_time4(&sidata->check, p_data+O8_CT, NULL_OK);
-                    p_lname = si_name_read((char *) &sidata->fname, p_data+O8_OWN);
-                    si_name_read((char *) &sidata->lname, p_lname);
-					sidata->npunch = p_data[O8_PP];
-                    i = 0;
-					switch(p_data[O8_CN]){
-						case ID_SI9:
-							offset = O9_PUNCH;
-							break;
-						case ID_SI8:
-							offset = O8_PUNCH;
-							break;
-						case ID_SIp:
-							offset = Op_PUNCH;
-							break;
-						case ID_SIt:
-							offset = Ot_PUNCH;
-							break;
-						case ID_SI10:
-							offset = O10_PUNCH;
-							break;
-						default:
-							si_errno = ERR_UNKNCARD;
-							return -1;
-					}
-				}
-                while(i < sidata->npunch && offset < BLOCK_SIZE){
-                    sidata->punches[i].cn = p_data[offset+1];
-                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
-                    i++; offset += 4;
-				}
-			}else{
-                si_errno = ERR_UNDATA;
-                return -1;
-            }
-		}else{
-            // si_errno set in si_handshake
-            return -1;
-        }
-        // Skip blocks we do not need
-        while(offset >= BLOCK_SIZE){
-            block++;
-            offset -= BLOCK_SIZE;
-        }
-	}while(i < sidata->npunch);
-
-	/* Send ACK to commit finished reading */
-	len_ack = si_frame(data_ack_framed, data_ack, 1);
-	si_write(sfd, data_ack_framed, len_ack);
-
-	return len;
-}
-
-/*
- * Reading SI6 cards
- */
-int si_read_si6(int sfd, struct s_sidata *sidata){
-	int len, len_ack;
-	byte data[DATA_CHUNK], data_ack_framed[8], data_ack[] = { ACK };
-	byte *p_data;
-	byte block = 0;
-	int offset, i;
-	
-	do{
-		len = si_handshake(data, sfd, TIMEOUT_READ, MAX_TRIES, C_READ6, 0x01, block);
-		if(len > 0){
-			if(data[0] == C_READ6){
-				if(block == 0){					            // First block
-					p_data = (byte *) data + O6_SHIFT;		// Offset of card data
-					sidata->cardnum = si_cardnum(p_data[O6_CN], p_data[O6_CN+1], p_data[O6_CN+2], p_data[O6_CN+3]);
-					si_time4(&sidata->start, p_data+O6_ST, NULL_OK);
-					si_time4(&sidata->finish, p_data+O6_FT, NULL_OK);
-					si_time4(&sidata->check, p_data+O6_CT, NULL_OK);
-					si_time4(&sidata->clear, p_data+O6_ET, NULL_OK);
-                    si_name_read((char *) &sidata->fname, p_data+O6_FN);
-                    si_name_read((char *) &sidata->lname, p_data+O6_LN);
-					sidata->npunch = p_data[O6_PP];
-                    i = 0;
-                    offset = O6_PUNCH;
-				}
-                while(i < sidata->npunch && offset < BLOCK_SIZE){
-                    sidata->punches[i].cn = p_data[offset+1];
-                    si_time4(&sidata->punches[i], p_data+offset, NULL_NO);
-                    i++; offset += 4;
-				}
-			}else{
-                si_errno = ERR_UNDATA;
-                return -1;
-            }
-		}else{
-            // si_errno set in si_handshake
-            return -1;
-        }
-        // Skip blocks we do not need
-        while(offset >= BLOCK_SIZE){
-            block++;
-            offset -= BLOCK_SIZE;
-        }
-	}while(i < sidata->npunch);
-
-	/* Send ACK to commit finished reading */
-	len_ack = si_frame(data_ack_framed, data_ack, 1);
-	si_write(sfd, data_ack_framed, len_ack);
-
-	return len;
-}
-
-/*
  * Reading name
  * End with double space, 20 chars or semicolon
  */
-byte *si_name_read(char *name, byte *data){
+byte *si_name(char *name, byte *data){
     int i;
 
     if(*data >= 'A' || *data <= 'z'){
