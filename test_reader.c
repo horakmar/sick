@@ -10,7 +10,7 @@
 #include <errno.h>
 #include <signal.h>
 
-#include "sportident.h"
+#include "si_base.h"
 
 void termination_handler(int signum){
 	f_term = 1;
