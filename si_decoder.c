@@ -13,18 +13,6 @@
 /****************************************************************************
  * Includes
  ****************************************************************************/
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <string.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <error.h> 
-#include <stdarg.h>
-#include <errno.h>
-
 #include "si_base.h"
 
 /****************************************************************************
