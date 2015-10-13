@@ -4,17 +4,12 @@
 
 #include <error.h>
 #include <errno.h>
-#include <limits.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <signal.h>
-#include <sys/wait.h>
 
 #include "si_base.h"
-#include "si_print.h"
 
 #define FIFO_NAME "/tmp/si_data_fifo"
 #define READER_TICK_TIMER 60 			// seconds
@@ -25,21 +20,16 @@ void termination_handler(int signum){
 
 int main(void){
     int datafd;
-    int r;
-	pid_t pid;
-    struct s_sidata data;
 	struct s_dev *first_dev, *dev, **pp_dev;
 
 	si_verbose = 1;		// set si library verbose level
 
-	if(sizeof(data) > PIPE_BUF){
+	if(sizeof(struct s_sidata) > PIPE_BUF){
 		error(EXIT_FAILURE, ERR_SIZE, "Size of card data too big.\n");
 	}
 
     if(access(FIFO_NAME, F_OK) == -1){
-        if(mkfifo(FIFO_NAME, 0777) != 0){
-            error(EXIT_FAILURE, errno, "Cannot create fifo %s.\n", FIFO_NAME);
-        }
+		error(EXIT_FAILURE, errno, "Cannot access fifo %s.\n", FIFO_NAME);
     }
 
 	if(si_detect_devices(&first_dev) == 0){
@@ -70,31 +60,11 @@ int main(void){
 	signal(SIGTERM, termination_handler);
 	signal(SIGHUP, termination_handler);
 
-	pid = fork();
-	switch(pid){
-		case -1:
-			error(EXIT_FAILURE, errno, "Cannot create new process.\n");
-		case 0: // SI reader
-			if((datafd = open(FIFO_NAME, O_WRONLY)) == -1){
-				error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
-			}else{
-				si_reader_m(first_dev, datafd, READER_TICK_TIMER);
-				close(datafd);
-			}
-			break;
-		default:
-			if((datafd = open(FIFO_NAME, O_RDONLY)) == -1){
-				error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
-			}else{
-				do{
-					r = read(datafd, &data, sizeof(data));
-					if(r > 0){
-						printf(">>> SI card:\n");
-						si_print_card(&data, stdout);
-					}
-				}while(r > 0);
-			}
-			wait(NULL);
+	if((datafd = open(FIFO_NAME, O_WRONLY)) == -1){
+		error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
+	}else{
+		si_reader_m(first_dev, datafd, READER_TICK_TIMER);
+		close(datafd);
 	}
 
 // SI device reset to original state procedure
