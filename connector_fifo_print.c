@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -17,7 +18,6 @@
 #include "si_print.h"
 
 #define FIFO_NAME "/tmp/si_data_fifo"
-#define READLOOP_TICK_TIMEOUT 50	// seconds
 
 void termination_handler(int signum){
 	f_term = 1;
@@ -30,7 +30,7 @@ int main(void){
     struct s_sidata data;
 	struct s_dev *first_dev, *dev, **pp_dev;
 
-	si_verbose = 1;		// set si library verbose level
+	si_verbose = 4;		// set si library verbose level
 
 	if(sizeof(data) > PIPE_BUF){
 		error(EXIT_FAILURE, ERR_SIZE, "Size of card data too big.\n");
@@ -78,7 +78,7 @@ int main(void){
 			if((datafd = open(FIFO_NAME, O_WRONLY)) == -1){
 				error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
 			}else{
-				si_reader_m(first_dev, datafd, READLOOP_TICK_TIMEOUT);
+				si_reader_m(first_dev, datafd, 5);
 			}
 			break;
 		default:
@@ -88,6 +88,7 @@ int main(void){
 				do{
 					r = read(datafd, &data, sizeof(data));
 					if(r > 0){
+						printf(">>> SI card:\n");
 						si_print_card(&data, stdout);
 					}
 				}while(r > 0);
