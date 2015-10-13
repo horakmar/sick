@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <signal.h>

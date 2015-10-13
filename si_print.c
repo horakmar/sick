@@ -14,34 +14,12 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "si_types.h"
+#include "si_base.h"
 #include "si_print.h"
 
 /****************************************************************************
- * Debug print
+ * Functions
  ****************************************************************************/
-void si_print_hex(byte *data, uint len, FILE *stream){
-    uint i;
-    char data_str[len+1];
-
-    strncpy(data_str, (char *) data, len);
-    data_str[len] = '\0';
-    fprintf(stream, "%d: ", len);
-    for(i = 0; i < len; i++){
-        fprintf(stream, "%02X ", data[i]);
-    }
-    putc('\n', stream);
-}
-
-char *si_timestr(char *time, S_PUNCH *punch){
-
-	if(punch->timestat == NONE){
-		strcpy(time, "--");
-	}else{
-		sprintf(time, "%02d:%02d:%02d", punch->hour, punch->min, punch->sec);
-	}
-	return time;
-}
 
 void si_print_card(struct s_sidata *card, FILE *stream){
 	int i;

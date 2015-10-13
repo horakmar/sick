@@ -15,6 +15,7 @@
  ****************************************************************************/
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <error.h> 
 #include <errno.h>
 
@@ -91,7 +92,7 @@ int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout){
 						default:
 							if(si_verbose > 1){
 								error(EXIT_SUCCESS, errno, "Unexpected data:\n");
-								si_print_hex(data_unframed, len, stderr);
+								si_print_hex(data_unframed, len);
 							}
 
 					}
@@ -103,7 +104,7 @@ int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout){
 				}else{
 					if(si_verbose > 1){
 						error(EXIT_SUCCESS, errno, "Unexpected data:\n");
-						si_print_hex(data_unframed, len, stderr);
+						si_print_hex(data_unframed, len);
 					}
 				}
 			}else{

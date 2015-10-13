@@ -13,6 +13,8 @@
 /****************************************************************************
  * Includes
  ****************************************************************************/
+#include <string.h>
+#include <stdio.h>
 #include "si_base.h"
 
 /****************************************************************************
@@ -36,7 +38,7 @@ uint32 si_cardnum(byte si3, byte si2, byte si1, byte si0){
 /*
  * Decode 2 byte time
  */
-void si_time3(S_PUNCH *punch, byte *t, char detect_null){
+void si_time3(struct s_punch *punch, byte *t, char detect_null){
 
 	punch->time = (*t << 8) + *(t+1);
 	if(detect_null == NULL_OK && punch->time == 0xEEEE){
@@ -54,7 +56,7 @@ void si_time3(S_PUNCH *punch, byte *t, char detect_null){
 /*
  * Decode 4 byte time
  */
-void si_time4(S_PUNCH *punch, byte *t, char detect_null){
+void si_time4(struct s_punch *punch, byte *t, char detect_null){
 
 	punch->time = (*t & 0x01) * 43200 + (*(t+2) << 8) + *(t+3);
 	if(detect_null == NULL_OK && punch->time == 0xEEEE){
@@ -89,3 +91,17 @@ byte *si_name(char *name, byte *data){
     *name = '\0';
     return data+i;
 }
+
+/*
+ * Formatting punch time
+ */
+char *si_timestr(char *time, struct s_punch *punch){
+
+	if(punch->timestat == NONE){
+		strcpy(time, "--");
+	}else{
+		sprintf(time, "%02d:%02d:%02d", punch->hour, punch->min, punch->sec);
+	}
+	return time;
+}
+

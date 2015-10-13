@@ -64,7 +64,7 @@ void si_perror(char *prefix){
 /****************************************************************************
  * Data manipulation
  ****************************************************************************/
-void si_clear_punch(S_PUNCH *punch){
+void si_clear_punch(struct s_punch *punch){
 
 	punch->cn = 0;			// control number
 	punch->time = 0;		// time in sec
@@ -395,7 +395,7 @@ int si_read(int sfd, byte *buff){
 	if(size > 0){
 		if(si_verbose > 2){
 			fputs("<i<< ", stderr);
-			si_print_hex(buff, size, stderr);
+			si_print_hex(buff, size);
 		}
 	}
 	return size;
@@ -406,7 +406,7 @@ int si_write(int sfd, byte *buff, uint len){
 
 	if(si_verbose > 2){
 		fputs(">o>> ", stderr);
-		si_print_hex(buff, len, stderr);
+		si_print_hex(buff, len);
 	}
     return(size = write(sfd, buff, len));
 }
@@ -573,5 +573,21 @@ char si_station_resetprot(int sfd, byte cpc){
 		return -1;
 	}
 	return cpc;
+}
+
+/****************************************************************************
+ * Debug print
+ ****************************************************************************/
+void si_print_hex(byte *data, uint len){
+    uint i;
+    char data_str[len+1];
+
+    strncpy(data_str, (char *) data, len);
+    data_str[len] = '\0';
+    fprintf(stderr, "%d: ", len);
+    for(i = 0; i < len; i++){
+        fprintf(stderr, "%02X ", data[i]);
+    }
+    putc('\n', stderr);
 }
 

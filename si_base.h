@@ -62,7 +62,57 @@ extern int f_term;
 /****************************************************************************
  * Types
  ****************************************************************************/
-#include "si_types.h"
+typedef unsigned char byte;
+typedef unsigned short int uint16;
+typedef unsigned int uint;
+typedef unsigned int uint32;
+
+typedef enum e_speed {
+    LOW = 0,
+    HIGH = 1
+} E_SPEED;
+typedef enum e_instset {
+    OLD = 2,
+    NEW = 4
+} E_INSTSET;
+typedef enum e_tstat {
+    NONE = 0,
+    H12 = 1,
+    H24 = 2
+} E_TSTAT;
+
+struct s_punch {
+    uint    cn;          // control number
+    uint32  time;        // time in seconds
+    byte    dow;         // day of week
+    byte    hour;
+    byte    min;
+    byte    sec;
+    uint16  msec;
+    E_TSTAT timestat;
+};
+
+struct s_dev {
+	char	*devfile;   // Name of device file (/dev/ttyUSB0)
+    int     fd;         // Device file descriptor after opening
+    char    prot;       // Station current protocol (for saving)
+	struct  s_dev *next;
+};
+
+#define SI_NAME_MAX 20          // Max length of name on SI card
+#define PUNCHES_MAX 128
+struct s_sidata {
+    uint32  cardnum;
+    int cardtype;
+    struct s_punch start;
+    struct s_punch finish;
+    struct s_punch clear;
+    struct s_punch check;
+    byte    npunch;     // Number of punches
+    struct s_punch punches[PUNCHES_MAX];
+    char lname[SI_NAME_MAX+1];
+    char fname[SI_NAME_MAX+1];
+};
 
 /****************************************************************************
  * Function prototypes
@@ -71,7 +121,7 @@ extern int f_term;
 char *si_strerror(int si_errno);
 void si_perror(char *prefix);
 
-void si_clear_punch(S_PUNCH *punch);
+void si_clear_punch(struct s_punch *punch);
 void si_clear_sidata(struct s_sidata *sidata);
 
 uint16 si_crc(uint Length, byte *p_Data);
@@ -94,6 +144,9 @@ int si_station_detect(int sfd);
 char si_station_setprot(int sfd);
 char si_station_resetprot(int sfd, byte cpc);
 
+void si_print_hex(byte *data, uint len);
+
+
 // si_readloop.c
 int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout);
 
@@ -104,6 +157,7 @@ int si_read_si8(int sfd, struct s_sidata *sidata);
 
 // si_decoder.c
 uint32 si_cardnum(byte si3, byte si2, byte si1, byte si0);
-void si_time3(S_PUNCH *punch, byte *t, char detect_null);
-void si_time4(S_PUNCH *punch, byte *t, char detect_null);
+void si_time3(struct s_punch *punch, byte *t, char detect_null);
+void si_time4(struct s_punch *punch, byte *t, char detect_null);
 byte *si_name(char *name, byte *data);
+char *si_timestr(char *time, struct s_punch *punch);
