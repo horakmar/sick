@@ -17,7 +17,7 @@
 #define SOCKET_NAME "/tmp/si_data_sock"
 
 int main(void){
-	int sockfd, newsockfd;
+	int sockfd, clifd;
 	size_t clilen;
 	struct sockaddr_un srv_addr, cli_addr;
     int r;
@@ -34,18 +34,20 @@ int main(void){
     if(bind(sockfd, (struct sockaddr *) &srv_addr, sizeof(srv_addr)) < 0){
 		error(EXIT_FAILURE, errno, "Cannot bind socket.");
 	}
-	listen(sockfd, 1);
-	clilen = sizeof(cli_addr);
-	newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-	if(newsockfd < 0){
-		error(EXIT_SUCCESS, errno, "Cannot accept socket connection.");
-	}else{
-		while((r = read(newsockfd, &data, sizeof(data))) > 0){
-			si_print_card(&data, stdout);
+	listen(sockfd, 5);
+	do {
+		clilen = sizeof(cli_addr);
+		clifd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+		if(clifd < 0){
+			error(EXIT_SUCCESS, errno, "Cannot accept socket connection.");
+		}else{
+			if((r = read(clifd, &data, sizeof(data))) > 0){
+				si_print_card(&data, stdout);
+			}
 		}
-	}
-	printf(">>> Result: %d\n", r);
-	close(newsockfd);
+		printf(">>> Read bytes: %d\n", r);
+		close(clifd);
+	} while(1);
 	close(sockfd);
     return 0;
 }

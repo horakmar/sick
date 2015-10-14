@@ -45,6 +45,8 @@
 #define ERR_UNDATA		12
 #define ERR_UNKNCARD	13
 #define ERR_SIZE		14
+#define ERR_OLDSTATION  15
+#define ERR_SETPROT		16
 
 
 /****************************************************************************
@@ -148,6 +150,7 @@ void si_print_hex(byte *data, uint len);
 
 
 // si_readloop.c
+int si_reader_s(int dev_fd, int write_fd, uint tick_timeout);
 int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout);
 
 // si_reader.c

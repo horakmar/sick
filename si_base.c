@@ -181,10 +181,10 @@ static int walk(struct s_dev **dev_first, struct s_dev **dev_last){
 					fread(idp, SI_ID_LEN, 1, fi_idp) > 0 &&
 					strncmp(idp, SI_PRODUCT_ID, SI_ID_LEN) == 0){
 						if((p_dev = (struct s_dev *) malloc(sizeof(struct s_dev))) == NULL){
-							error(1, errno, "Cannot malloc.");
+							error(EXIT_FAILURE, errno, "Cannot malloc.");
 						}
 						if((p_dev->devfile = malloc(sizeof(d->d_name) + sizeof(SI_DEV_PREFIX))) == NULL){
-							error(1, errno, "Cannot malloc.");
+							error(EXIT_FAILURE, errno, "Cannot malloc.");
 						}
 						strcpy(p_dev->devfile, SI_DEV_PREFIX);
                         strcat(p_dev->devfile, d->d_name);
