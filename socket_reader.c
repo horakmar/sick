@@ -1,5 +1,5 @@
 /*
- * Reader of SI data writing to socket
+ * Multiprocess reader of SI data writing to socket
  */
 
 #include <error.h>
@@ -16,7 +16,7 @@
 #include "si_base.h"
 
 #define SOCKET_NAME "/tmp/si_data_sock"
-#define READER_TICK_TIMER 60 			// seconds
+#define SELECT_TIMEOUT 5		// seconds
 
 struct s_client {
 	pid_t pid;
@@ -34,6 +34,10 @@ int main(void){
 	struct sockaddr_un srv_addr;
 	struct s_dev *first_dev, *dev;
 	struct s_client *first_cli, *cli, *newcli;
+// for select
+	fd_set set_read;
+	struct timeval tm;
+	int nready;
 
 	si_verbose = 1;		// set si library verbose level
 
@@ -67,19 +71,35 @@ int main(void){
 				signal(SIGQUIT, termination_handler);
 				signal(SIGTERM, termination_handler);
 				signal(SIGHUP, termination_handler);
-				
+
+
 				while(f_term == 0){
-					if((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0){
-						error(EXIT_SUCCESS, errno, "Cannot open socket.");
-						break;
+					FD_ZERO (&set_read);
+					FD_SET (dev->fd, &set_read);
+					tm.tv_sec = SELECT_TIMEOUT;
+					tm.tv_usec = 0;
+					nready = select(FD_SETSIZE, &set_read, NULL, NULL, &tm);
+					if(nready == -1){
+						if(errno == EINTR){
+							continue;
+						}else{
+							error(EXIT_FAILURE, errno, "Select error on %s", dev->devfile);
+						}
+					}else if(nready > 0){
+						if((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0){
+							error(EXIT_SUCCESS, errno, "Cannot open socket.");
+							break;
+						}
+						srv_addr.sun_family = AF_UNIX;
+						strcpy(srv_addr.sun_path, SOCKET_NAME);
+						if (connect(sockfd, (struct sockaddr *) &srv_addr, sizeof(srv_addr)) == -1) {
+							error(EXIT_FAILURE, errno, "Cannot connect to server socket.");
+						}
+						si_reader_s(dev->fd, sockfd);
+						close(sockfd);
+					}else{
+						if(si_verbose > 2) puts("Tick.");
 					}
-					srv_addr.sun_family = AF_UNIX;
-					strcpy(srv_addr.sun_path, SOCKET_NAME);
-					if (connect(sockfd, (struct sockaddr *) &srv_addr, sizeof(srv_addr)) == -1) {
-						error(EXIT_FAILURE, errno, "Cannot connect to server socket.");
-					}
-					si_reader_s(dev->fd, sockfd, READER_TICK_TIMER);
-					close(sockfd);
 				}
 			} while(0);
 				
