@@ -25,13 +25,66 @@
 int f_term = 0;
 
 /****************************************************************************
- * Reader loop.
+ * Reader loops
  ****************************************************************************/
 /*
- * Loop for reading SI cards
+ * Reading SI cards
  * When card is inserted, reads it, process data and write them to write_fd
  * Both file descriptors must be opened
  */
+/*
+ * Single SI device simple reader, for communication via sockets
+ * No waiting for input through 'select', only reading
+ */ 
+int si_reader_s(int dev_fd, int write_fd){
+	struct s_sidata sidata;
+	byte data_read[DATA_CHUNK], data_unframed[DATA_CHUNK];
+	uint len;
+
+	len = si_read(dev_fd, data_read);
+	if(len > 0){
+		len = si_unframe(data_unframed, data_read, len);
+		if(len > 1){		// Inserted SI card ...?
+			si_clear_sidata(&sidata);
+			switch(data_unframed[0]){
+				case IN5:
+					si_read_si5(dev_fd, &sidata);
+					break;
+				case IN6:
+					si_read_si6(dev_fd, &sidata);
+					break;
+				case IN8:
+					si_read_si8(dev_fd, &sidata);
+					break;
+				case OUT:
+					break;
+				default:
+					if(si_verbose > 1){
+						error(EXIT_SUCCESS, errno, "Unexpected data:\n");
+						si_print_hex(data_unframed, len);
+					}
+
+			}
+			if(sidata.cardnum > 0){
+				if(write(write_fd, &sidata, sizeof(sidata)) != sizeof(sidata)){
+					error(EXIT_SUCCESS, errno, "Not all data written out.\n");
+				}
+			}
+		}else{
+			if(si_verbose > 1){
+				error(EXIT_SUCCESS, errno, "Unexpected data:\n");
+				si_print_hex(data_unframed, len);
+			}
+		}
+	}
+	return 0;
+}
+
+/* 
+ * Multiple SI devices reader, controlled by select()
+ * For communication via fifo, loop ends if global f_term is set
+ */
+
 int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout){
 	struct s_sidata sidata;
 	fd_set set_read, set_active;
@@ -98,7 +151,7 @@ int si_reader_m(struct s_dev *first_dev, int write_fd, uint tick_timeout){
 					}
 					if(sidata.cardnum > 0){
 						if(write(write_fd, &sidata, sizeof(sidata)) != sizeof(sidata)){
-							error(EXIT_SUCCESS, errno, "Not all data written to pipe.\n");
+							error(EXIT_SUCCESS, errno, "Not all data written out.\n");
 						}
 					}
 				}else{
