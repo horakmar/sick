@@ -2,13 +2,16 @@
 
 SI_LIBS = si_base.o si_decoder.o si_reader.o si_readloop.o si_print.o
 
-PROGRAMS = test_reader connector_fifo_print fifo_reader connector_fifo_onlyprint connector_socket_print socket_reader
+PROGRAMS = test_reader connector_fifo_print fifo_reader connector_fifo_onlyprint connector_socket_print socket_reader reader_curl
 
 CC = gcc
 CFLAGS = -pedantic -Wall -Wstrict-prototypes -std=gnu99 -g -D DEBUG
 LIB = si_base.a
 
 all: $(PROGRAMS)
+
+reader_curl: reader_curl.o $(LIB)
+	$(CC) -o $@ $^ -l json-c -l curl
 
 test_reader: test_reader.o $(LIB)
 	$(CC) -o $@ $^
@@ -31,6 +34,8 @@ socket_reader: socket_reader.o $(LIB)
 $(LIB): $(LIB)($(SI_LIBS))
 
 si_base.o: si_base.c si_base.h si_const.h
+
+reader_curl.o: reader_curl.c si_base.h si_const.h si_print.h
 
 test_reader.o: test_reader.c si_base.h si_const.h
 

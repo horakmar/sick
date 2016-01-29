@@ -12,4 +12,5 @@
  * Function prototypes
  ****************************************************************************/
 void si_print_card(struct s_sidata *card, FILE *stream);
-
+char *si_makepost_card(struct s_sidata *card);
+void si_freepost(char *outdata);
