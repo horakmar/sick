@@ -24,6 +24,8 @@
 #define FIFO_NAME "/tmp/si_data_fifo"
 #define READER_TICK_TIMER 60 			// seconds
 
+#define READER_URL "http://localhost/gorgon/www/reader/reader/test3"
+
 void termination_handler(int signum){
 	f_term = 1;
 }
@@ -158,7 +160,7 @@ int main(void){
 					if(r > 0){
 						if((postdata = si_data_json(&data))){
 							curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-							curl_easy_setopt(curl, CURLOPT_URL, "http://localhost/gorgon/www/reader/reader");
+							curl_easy_setopt(curl, CURLOPT_URL, READER_URL);
 							curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 							printf(">>> JSON DATA: %s\n", postdata); 
 							curl_easy_perform(curl);
