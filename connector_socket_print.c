@@ -18,7 +18,7 @@
 
 int main(void){
 	int sockfd, clifd;
-	size_t clilen;
+	socklen_t clilen;
 	struct sockaddr_un srv_addr, cli_addr;
     int r;
     struct s_sidata data;

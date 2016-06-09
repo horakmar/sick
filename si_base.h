@@ -47,7 +47,18 @@
 #define ERR_SIZE		14
 #define ERR_OLDSTATION  15
 #define ERR_SETPROT		16
+#define ERR_ARGS		17
 
+
+/****************************************************************************
+ * Server status
+ ****************************************************************************/
+#define STAT_OK	        0
+#define STAT_NORACE     1
+#define STAT_NOAUTH     2
+#define STAT_NOCONN     3
+#define STAT_ERROR      4
+#define STAT_UNKNOWN    5
 
 /****************************************************************************
  * Macros
@@ -164,3 +175,10 @@ void si_time3(struct s_punch *punch, byte *t, char detect_null);
 void si_time4(struct s_punch *punch, byte *t, char detect_null);
 byte *si_name(char *name, byte *data);
 char *si_timestr(char *time, struct s_punch *punch);
+
+// si_json.c
+const char *si_stat_errdesc(int err);
+char *si_data_json(struct s_sidata *card);
+char *si_init_json(void);
+int si_getstatus_json(char *jsonstr);
+char *si_getstring_json(char *jsonstr, char *retkey);

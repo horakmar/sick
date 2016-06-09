@@ -1,11 +1,12 @@
 # Makefile for Sportident various test programs
 
-SI_LIBS = si_base.o si_decoder.o si_reader.o si_readloop.o si_print.o
+SI_LIBS = si_base.o si_decoder.o si_reader.o si_readloop.o si_print.o si_json.o
 
 PROGRAMS = test_reader connector_fifo_print fifo_reader connector_fifo_onlyprint connector_socket_print socket_reader reader_curl
 
 CC = gcc
 CFLAGS = -pedantic -Wall -Wstrict-prototypes -std=gnu99 -g -D DEBUG
+ARFLAGS = rvU
 LIB = si_base.a
 
 all: $(PROGRAMS)
@@ -46,6 +47,8 @@ si_reader.o: si_reader.c si_base.h si_const.h
 si_readloop.o: si_readloop.c si_base.h si_const.h
 
 si_print.o: si_print.c si_base.h si_const.h si_print.h
+
+si_json.o: si_json.c si_base.h
 
 connector_fifo_print.o: connector_fifo_print.c si_base.h si_const.h si_print.h
 
