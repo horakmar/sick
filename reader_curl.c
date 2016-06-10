@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <signal.h>
@@ -31,7 +32,7 @@ void termination_handler(int signum){
 }
 
 #define stringparam(STRING, MAXSIZE) \
-    if(++i > argc) { \
+    if(++i >= argc) { \
         error(EXIT_FAILURE, ERR_ARGS, "Unset parameter.\n"); \
     } else if(strlen(argv[i]) >= (MAXSIZE)){ \
         error(EXIT_FAILURE, ERR_ARGS, "Parameter too long.\n"); \
@@ -41,7 +42,7 @@ void termination_handler(int signum){
 
 /* Usage */
 int Usage(char *progname){
-	const char help[] = "\n"
+    const char help[] = "\n"
 "Pouziti:\n"
 "    %s [-h] [-tvq]\n"
 "\n"
@@ -53,11 +54,12 @@ int Usage(char *progname){
 "    -q  ... quiet - vypisovat mene informaci\n"
 "    -s <server> ... Gorgon <server> [localhost]\n"
 "    -r <zavod>  ... Gorgon <zavod> [test]\n"
+"    -l <log>    ...logovat do souboru <log>\n"
 "\n"
 "Chyby:\n"
 "\n";
-	printf(help, progname);
-	return 0;
+    printf(help, progname);
+    return 0;
 }
 /* End of usage */
 
@@ -84,54 +86,59 @@ WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
 /* Curl callbacks */
 size_t debug_cb(char *ptr, size_t size, size_t nmemb, void *dummy){
     size_t realsize = size * nmemb;
-	
-	printf("Received from server:\n%s\n", ptr);
-	return realsize;
+    
+    printf("Received from server:\n%s\n", ptr);
+    return realsize;
 }
 
 size_t status_cb(char *ptr, size_t size, size_t nmemb, void *server_status){
     size_t realsize = size * nmemb;
-	int *st = (int *) server_status;
+    int *st = (int *) server_status;
 
-	*st = si_getstatus_json(ptr);
-	if(*st == STAT_ERROR){
-		printf("Bad response from server:\n%s\n", ptr);
-	}
-	return realsize;
+    *st = si_getstatus_json(ptr);
+    if(*st == STAT_ERROR){
+        printf("Bad response from server:\n%s\n", ptr);
+    }
+    return realsize;
 }
 
 size_t display_cb(char *ptr, size_t size, size_t nmemb, char **displaystr){
     size_t realsize = size * nmemb;
 
-	*displaystr = si_getstring_json(ptr, "display_out");
-	if(*displaystr == NULL){
-		printf("Bad response from server:\n%s\n", ptr);
-	}
-	return realsize;
+    *displaystr = si_getstring_json(ptr, "display_out");
+    if(*displaystr == NULL){
+        printf("Bad response from server:\n%s\n", ptr);
+    }
+    return realsize;
 }
 /* Server listener test */
 int ServerTest(char *url){
-	CURL *curl;
-	char *postdata;
-	struct curl_slist *headers;
-	int server_status = STAT_NOCONN;
+    CURL *curl;
+    char *postdata;
+    struct curl_slist *headers;
+    int server_status = STAT_NOCONN;
 
-	curl = curl_easy_init();
-	headers = NULL;
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	headers = curl_slist_append(headers, "charsets: utf-8");
-	if((postdata = si_init_json())){
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-		curl_easy_setopt(curl, CURLOPT_URL, url);
-		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &server_status);
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, status_cb);
-		curl_easy_perform(curl);
-		free(postdata);
-	}
-	return server_status;
+    curl = curl_easy_init();
+    headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "charsets: utf-8");
+    if((postdata = si_init_json())){
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &server_status);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, status_cb);
+        curl_easy_perform(curl);
+        free(postdata);
+    }
+    return server_status;
 }
 /* End of server listener test*/
+
+#define MAX_PARAMS 256
+#define MAXL_SERVER 51
+#define MAXL_RACE 51
+#define MAXL_LOGFILE 256
 
 int main(int argc, char **argv){
     int datafd;
@@ -142,21 +149,22 @@ int main(int argc, char **argv){
     char *postdata;
     CURL *curl;
     struct curl_slist *headers;
-	char *displaystr;
-	
-#define MAX_PARAMS 256
+    char *displaystr;
+    char cwd[MAXL_LOGFILE];
+    time_t timer;
+    FILE *fp_log;
 
 /* Loop counters */
     size_t i = 0;
     size_t j = 0;
     size_t p = 0;
 
-#define MAXL_SERVER 51
-#define MAXL_RACE 51
 /* Variables */
     int verbose = 1;
+    char f_log = 0;
     char server[MAXL_SERVER]; strcpy(server, "localhost");
     char race[MAXL_RACE]; strcpy(race, "test");
+    char logfile[MAXL_LOGFILE]; logfile[0] = '\0';
     char *url;
 
     char *params[MAX_PARAMS];
@@ -180,9 +188,13 @@ int main(int argc, char **argv){
                   case 'r':
                       stringparam(race, MAXL_RACE);
                       goto nextparm;
-				  case 'h':
-					  Usage(argv[0]);
-					  return 0;
+                  case 'l':
+                      stringparam(logfile, MAXL_LOGFILE);
+                      f_log = 1;
+                      goto nextparm;
+                  case 'h':
+                      Usage(argv[0]);
+                      return 0;
                 }
             }
           nextparm:
@@ -197,6 +209,10 @@ int main(int argc, char **argv){
 
 /* End of getparam */
 
+    if(getcwd(cwd, MAXL_LOGFILE) == NULL){
+        error(EXIT_FAILURE, ERR_SIZE, "Too long path.");
+    }
+
     si_verbose = verbose;     // set si library verbose level
     url = (char *) malloc(strlen(URL1) + strlen(URL2) + strlen(server) + strlen(race));
     strcpy(url, URL1);
@@ -207,12 +223,12 @@ int main(int argc, char **argv){
     if(verbose > 1) printf(">> URL: %s\n", url);
 
     if(sizeof(data) > PIPE_BUF){
-        error(EXIT_FAILURE, ERR_SIZE, "Size of card data too big.\n");
+        error(EXIT_FAILURE, ERR_SIZE, "Size of card data too big.");
     }
 
     if(access(FIFO_NAME, F_OK) == -1){
         if(mkfifo(FIFO_NAME, 0777) != 0){
-            error(EXIT_FAILURE, errno, "Cannot create fifo %s.\n", FIFO_NAME);
+            error(EXIT_FAILURE, errno, "Cannot create fifo %s", FIFO_NAME);
         }
     }
 
@@ -220,9 +236,28 @@ int main(int argc, char **argv){
         error(EXIT_FAILURE, 0, "No SI devices detected.");
     }
 
-	if((r = ServerTest(url)) != STAT_OK){
-		error(EXIT_FAILURE, 0, "Server error: %s\n", si_stat_errdesc(r));
-	}
+    if((r = ServerTest(url)) != STAT_OK){
+        error(EXIT_FAILURE, 0, "Server error: %s", si_stat_errdesc(r));
+    }
+
+    chdir(cwd);
+
+    if(f_log){
+        if(logfile[0] != '/'){
+            if((strlen(cwd) + strlen(logfile) + 1) >= MAXL_LOGFILE){
+                error(EXIT_FAILURE, ERR_SIZE, "Too long path.");
+            }
+            strcat(cwd, "/");
+            strcat(cwd, logfile);
+            strcpy(logfile, cwd);
+        }
+
+        if((fp_log = fopen(logfile, "a")) == NULL){
+            error(EXIT_FAILURE, errno, "Cannot open log %s", logfile);
+        }
+
+        if(verbose > 1) printf(">> Logging into file: %s\n", logfile);
+    }
 
     pp_dev = &first_dev;
     while(*pp_dev != NULL){
@@ -262,7 +297,12 @@ int main(int argc, char **argv){
             }
             break;
         default:
-			if(verbose > 0) puts("Reading SI cards. Press Ctrl-C to break.");
+            if(verbose > 0) puts("Reading SI cards. Press Ctrl-C to break.");
+
+            timer = time(NULL);        
+            fputs("# ", fp_log);
+            fputs(ctime(&timer), fp_log);
+
             if((datafd = open(FIFO_NAME, O_RDONLY)) == -1){
                 error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
             }else{
@@ -274,18 +314,22 @@ int main(int argc, char **argv){
                     r = read(datafd, &data, sizeof(data));
                     if(r > 0){
                         if((postdata = si_data_json(&data))){
+                            if(f_log){
+                               fputs(postdata, fp_log);
+                               fputc('\n', fp_log);
+                            }
                             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
                             curl_easy_setopt(curl, CURLOPT_URL, url);
                             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-							curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &displaystr);
-							curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, display_cb);
-							//curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, debug_cb);
+                            curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &displaystr);
+                            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, display_cb);
+                            //curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, debug_cb);
                             if(verbose > 1) printf(">>> JSON DATA: %s\n", postdata); 
                             curl_easy_perform(curl);
-							if(displaystr != NULL){
-								puts(displaystr);
-								free(displaystr);
-							}
+                            if(displaystr != NULL){
+                                puts(displaystr);
+                                free(displaystr);
+                            }
                             free(postdata);
                         }
                     }
@@ -303,6 +347,7 @@ int main(int argc, char **argv){
         }
         dev = dev->next;
     }
+    if(f_log) fclose(fp_log);
     return 0;
 }
     
