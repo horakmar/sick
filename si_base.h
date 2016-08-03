@@ -179,6 +179,7 @@ char *si_timestr(char *time, struct s_punch *punch);
 // si_json.c
 const char *si_stat_errdesc(int err);
 char *si_data_json(struct s_sidata *card);
+struct s_sidata *si_json_data(struct s_sidata *card, char *jsonstr);
 char *si_init_json(void);
 int si_getstatus_json(char *jsonstr);
 char *si_getstring_json(char *jsonstr, char *retkey);

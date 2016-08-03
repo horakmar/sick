@@ -32,7 +32,7 @@ void termination_handler(int signum){
 }
 
 #define stringparam(STRING, MAXSIZE) \
-    if(++i >= argc) { \
+    if(++i > argc) { \
         error(EXIT_FAILURE, ERR_ARGS, "Unset parameter.\n"); \
     } else if(strlen(argv[i]) >= (MAXSIZE)){ \
         error(EXIT_FAILURE, ERR_ARGS, "Parameter too long.\n"); \
@@ -62,26 +62,6 @@ int Usage(char *progname){
     return 0;
 }
 /* End of usage */
-
-/*
-WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
-{
-  size_t realsize = size * nmemb;
-  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
- 
-  mem->memory = realloc(mem->memory, mem->size + realsize + 1);
-  if(mem->memory == NULL) {
-    printf("not enough memory (realloc returned NULL)\n");
-    return 0;
-  }
- 
-  memcpy(&(mem->memory[mem->size]), contents, realsize);
-  mem->size += realsize;
-  mem->memory[mem->size] = 0;
- 
-  return realsize;
-}
-*/
 
 /* Curl callbacks */
 size_t debug_cb(char *ptr, size_t size, size_t nmemb, void *dummy){
@@ -299,9 +279,11 @@ int main(int argc, char **argv){
         default:
             if(verbose > 0) puts("Reading SI cards. Press Ctrl-C to break.");
 
-            timer = time(NULL);        
-            fputs("# ", fp_log);
-            fputs(ctime(&timer), fp_log);
+			if(f_log) {
+				timer = time(NULL);        
+				fputs("# ", fp_log);
+				fputs(ctime(&timer), fp_log);
+			}
 
             if((datafd = open(FIFO_NAME, O_RDONLY)) == -1){
                 error(EXIT_FAILURE, errno, "Cannot open fifo.\n");
